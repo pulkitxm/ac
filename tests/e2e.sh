@@ -1,21 +1,4 @@
 #!/usr/bin/env bash
-# e2e.sh - integration tests for the Rust `ac`, against real containers.
-#
-# These are not unit tests. Every scenario drives the release binary against a
-# live Apple `container` daemon and asserts on observed state, because the
-# things most worth protecting here (daemon ownership, restart in place, volume
-# survival) simply cannot be faked.
-#
-# Two throwaway projects are written into ~/.config/ac/projects and removed
-# afterwards, along with their containers, volumes and images.
-#
-# The daemon must be stopped to exercise the ownership scenarios, which means
-# any containers already running (typically the user's own stack) are stopped
-# and then restored to exactly the state they were found in. A trap makes that
-# restoration run even if a scenario aborts.
-#
-# Usage: make e2e            (or ./tests/e2e.sh)
-#        KEEP=1 ./tests/e2e.sh   leave the test project in place for poking at
 
 set -uo pipefail
 
@@ -30,8 +13,6 @@ IMAGE="docker.io/library/alpine:3.20"
 
 [ -x "$AC" ] || { echo "build first: make build"; exit 1; }
 
-# ------------------------------------------------------------- reporting ---
-
 PASS=0; FAIL=0
 RESULTS=()
 
@@ -40,11 +21,11 @@ fail() { FAIL=$((FAIL+1)); RESULTS+=("FAIL|$1|$2"); printf '  \033[31mFAIL\033[0
 scen() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '  \033[2m%s\033[0m\n' "$*"; }
 
-check() { # check <name> <actual> <expected>
+check() {
   if [ "$2" = "$3" ]; then pass "$1" "$2"; else fail "$1" "expected [$3] got [$2]"; fi
 }
 
-check_contains() { # check_contains <name> <haystack> <needle>
+check_contains() {
   case "$2" in
     *"$3"*) pass "$1" "found: $3" ;;
     *)      fail "$1" "missing [$3] in: $(printf '%s' "$2" | head -c 400)" ;;
@@ -58,8 +39,6 @@ check_not_contains() {
   esac
 }
 
-# ------------------------------------------------------------- primitives ---
-
 daemon_up()   { container system status >/dev/null 2>&1; }
 owned()       { [ -f "$OWNER" ] && echo yes || echo no; }
 sup_running() {
@@ -68,7 +47,7 @@ sup_running() {
   if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo yes; else echo no; fi
 }
 
-cstate() { # cstate <container>  ->  running|stopped|absent
+cstate() {
   container ls -a --format json 2>/dev/null | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
@@ -79,7 +58,7 @@ else: print('absent')
 "
 }
 
-started_at() { # started_at <container> -> the daemon's startedDate, for change detection
+started_at() {
   container ls -a --format json 2>/dev/null | python3 -c "
 import json,sys
 try: d=json.load(sys.stdin)
@@ -98,8 +77,6 @@ except Exception: d=[]
 print(' '.join(c['id'] for c in d))
 "
 }
-
-# ------------------------------------------------------------------ setup ---
 
 mkdir -p "$PROJ_DIR" "$BUILD_ROOT"
 
@@ -180,7 +157,6 @@ FROM base AS final
 RUN echo final > /final.txt
 DOCKER
 
-# What was running before we touched anything. Restored verbatim on exit.
 PRE_RUNNING=""
 PRE_DAEMON="no"
 daemon_up && PRE_DAEMON="yes"
@@ -199,8 +175,6 @@ note "appRoot: ${APP_ROOT:-<unset>}"
 
 restore() {
   printf '\n\033[1m== restoring the environment as found\033[0m\n'
-  # Our own containers and volumes go first, so the refcount cannot keep the
-  # daemon alive for the wrong reason.
   if [ "${KEEP:-}" != "1" ]; then
     daemon_up || start_daemon_raw
     "$AC" actest1 down >/dev/null 2>&1
@@ -212,7 +186,6 @@ restore() {
     note "test project, containers, volume and image removed"
   fi
 
-  # ac must never be left owning a daemon it did not originally own.
   if [ "$PRE_DAEMON" = "yes" ]; then
     daemon_up || start_daemon_raw
     rm -f "$OWNER"
@@ -230,8 +203,6 @@ restore() {
   fi
 }
 
-# Start the daemon WITHOUT ac, so no ownership is recorded. This is how the
-# environment is put back the way it was found: externally owned.
 start_daemon_raw() {
   if [ -n "$APP_ROOT" ]; then
     container system start --app-root "$APP_ROOT" --timeout 90 >/dev/null 2>&1
@@ -243,15 +214,10 @@ start_daemon_raw() {
 
 trap restore EXIT
 
-# Pre-pull so the timing of later scenarios is about ac, not about the network.
 if daemon_up; then
   note "pre-pulling $IMAGE"
   container image pull "$IMAGE" >/dev/null 2>&1
 fi
-
-###############################################################################
-# PHASE 1: daemon as found. If it is already running, ac must never touch it.
-###############################################################################
 
 if [ "$PRE_DAEMON" = "yes" ]; then
 
@@ -285,7 +251,6 @@ scen "d. stop is non-destructive: containers restart in place, volume data survi
   read_back=$("$AC" actest1 exec alpha cat /data/marker </dev/null 2>/dev/null | tr -d '\r\n')
   check "d6 volume data survived the stop and start" "$read_back" "persisted-value"
 
-  # down removes the container but must leave the volume alone
   "$AC" actest1 down >/dev/null 2>&1
   check "d7 down removes the container" "$(cstate actest1-alpha)" "absent"
   vols=$(container volume ls 2>/dev/null | awk 'NR>1 {print $1}')
@@ -310,7 +275,6 @@ scen "e. service targeting"
   check_contains "e4 the error names the bad service" "$err" "nosuchsvc"
   check_contains "e5 the error lists the valid ones" "$err" "alpha beta"
 
-  # Both spellings of a service name resolve to the same container.
   out1=$("$AC" actest1 ip alpha 2>/dev/null)
   out2=$("$AC" actest1 ip actest1-alpha 2>/dev/null)
   check "e6 bare and prefixed service names agree" "$out1" "$out2"
@@ -355,7 +319,6 @@ print('ok' if d.get('\$schema') and 'services' in d.get('properties',{}) else 'b
 " 2>&1)
   check "f5 ac schema emits a JSON Schema" "$got" "ok"
 
-  # --json implies quiet: stdout must stay a single parseable document.
   errout=$("$AC" actest1 ls --json 2>&1 >/dev/null)
   check_not_contains "f6 --json suppresses the command echo" "$errout" '$ container'
 
@@ -398,10 +361,6 @@ scen "g. shell completions generate"
   check "g4 bash completion is syntactically valid" "$(bash -n /tmp/ac-e2e-comp.bash 2>&1 && echo ok)" "ok"
   check_contains "g5 zsh completion mentions the tool" "$(cat /tmp/ac-e2e-comp.zsh)" "#compdef ac"
   rm -f /tmp/ac-e2e-comp.zsh /tmp/ac-e2e-comp.bash
-
-###############################################################################
-# PHASE 2: the ownership scenarios, which need the daemon stopped first.
-###############################################################################
 
 scen "b/c setup: stopping everything so ac can be the one to start the daemon"
   "$AC" actest1 down >/dev/null 2>&1
@@ -453,17 +412,11 @@ scen "c. cross-project refcounting: stopping one project leaves the daemon up fo
   check "c8 ownership released"                        "$(owned)" "no"
 
 scen "k. the supervisor debounce reaps the daemon when containers vanish behind ac's back"
-  # The watchdog exists for exactly this: containers that go away without
-  # `ac down`, because they crashed, exited, or were stopped with plain
-  # `container stop`. The poll interval and grace are shortened so the test
-  # takes seconds rather than half a minute; the supervisor reads both from the
-  # environment it was spawned with.
   : > "$STATE_DIR/supervisor.log"
   AC_POLL_INTERVAL=1 AC_IDLE_GRACE=3 "$AC" actest1 start >/dev/null 2>&1
   check "k1 ac owns the daemon"     "$(owned)"       "yes"
   check "k2 the supervisor is live" "$(sup_running)" "yes"
 
-  # Bypass ac entirely.
   container stop actest1-alpha >/dev/null 2>&1
   container stop actest1-beta  >/dev/null 2>&1
   check "k3 the containers are down without ac's involvement" \
@@ -482,8 +435,6 @@ scen "k. the supervisor debounce reaps the daemon when containers vanish behind 
   log_tail=$(tail -20 "$STATE_DIR/supervisor.log" 2>/dev/null)
   check_contains "k7 the log shows it armed before acting"     "$log_tail" "armed"
   check_contains "k8 the log shows consecutive idle polls"     "$log_tail" "idle poll"
-
-###############################################################################
 
 printf '\n\033[1m== summary\033[0m\n'
 for r in "${RESULTS[@]}"; do

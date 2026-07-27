@@ -1,15 +1,3 @@
-//! Apple `container` daemon lifecycle, with strict ownership rules.
-//!
-//! THE CONTRACT:
-//!   * Daemon already running when ac needs it -> ac NEVER touches it. Not on
-//!     start, not on stop, not from the supervisor. It is someone else's.
-//!   * Daemon not running -> ac starts it, records ownership, and is then
-//!     responsible for stopping it once the last ac-managed container is gone.
-//!
-//! Ownership is recorded on disk (`~/.local/state/ac/daemon.owned`) rather than
-//! inferred, so a new `ac` invocation in a different shell still knows what the
-//! first one did.
-
 use std::fs;
 use std::path::Path;
 
@@ -21,8 +9,6 @@ pub fn running(ctx: &Ctx) -> bool {
     ctx.container(["system", "status"]).quiet_ok()
 }
 
-/// Same check without echoing, for polling loops and status lines that already
-/// print the interesting information.
 pub fn running_silent(ctx: &Ctx) -> bool {
     ctx.container(["system", "status"]).silent().quiet_ok()
 }
@@ -36,10 +22,6 @@ pub fn app_root(ctx: &Ctx) -> Option<String> {
     parse_app_root(&text)
 }
 
-/// Attach the APFS sparse bundle backing the app root, when one is configured.
-///
-/// Needed because a volume mounted `noowners` makes container-apiserver abort
-/// with "XPC connection error: Connection invalid".
 fn mount_backing_store(ctx: &Ctx) -> Result<()> {
     let bundle = ctx.config.sparse_bundle.trim();
     let mount = ctx.config.image_mount.trim();
@@ -67,7 +49,6 @@ fn mount_backing_store(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// Start the daemon only if it is not already up. Safe to call repeatedly.
 pub fn ensure(ctx: &Ctx) -> Result<()> {
     if running(ctx) {
         if is_ours(ctx) {
@@ -78,7 +59,6 @@ pub fn ensure(ctx: &Ctx) -> Result<()> {
         return Ok(());
     }
 
-    // Nothing running: this invocation becomes the owner.
     mount_backing_store(ctx)?;
 
     let timeout = ctx.config.start_timeout.to_string();
@@ -109,7 +89,6 @@ pub fn ensure(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-/// Stop the daemon, but ONLY if ac started it.
 pub fn release(ctx: &Ctx) -> Result<()> {
     if !is_ours(ctx) {
         ctx.dim("daemon was not started by ac - leaving it running");
