@@ -1,9 +1,3 @@
-//! Command line surface.
-//!
-//! Doc comments here become `--help` text. They are written for an agent
-//! reading `ac <cmd> --help` with no other context, so each one says what the
-//! command does, what it runs underneath, and gives an example.
-
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};

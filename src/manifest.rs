@@ -1,10 +1,3 @@
-//! The typed project manifest.
-//!
-//! A project is a JSON file in `~/.config/ac/projects/` or `<repo>/projects/`.
-//! Every struct here denies unknown fields, so a typo produces an error that
-//! names both the bad field and the valid alternatives instead of being
-//! silently ignored.
-
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,23 +6,18 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// Ordered string map. `preserve_order` on serde_json keeps manifest order.
 pub type JsonMap = Map<String, Value>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
-    /// Project name. Conventionally matches the file name.
     pub name: String,
     #[serde(default)]
     pub description: String,
-    /// Default directory builds run from when nothing better can be inferred.
     #[serde(default)]
     pub root: Option<String>,
-    /// Default `{{region}}` value. Defaults to `us-east-1`.
     #[serde(default)]
     pub region: Option<String>,
-    /// Sizing for the shared buildkit builder container.
     #[serde(default)]
     pub builder: Option<Builder>,
     #[serde(default)]
@@ -42,13 +30,9 @@ pub struct Manifest {
     pub services: Vec<Service>,
 }
 
-/// An insertion-ordered map with typed values.
 pub type JsonMapOf<T> = indexish::OrderedMap<T>;
 
 pub mod indexish {
-    //! A tiny insertion-ordered map built on `serde_json::Map`, which keeps
-    //! order thanks to the `preserve_order` feature. Avoids taking a direct
-    //! dependency on `indexmap` for a single field.
     use serde::de::DeserializeOwned;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_json::{Map, Value};
@@ -92,49 +76,35 @@ pub mod indexish {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Builder {
-    /// vCPUs given to the buildkit builder when it is created.
     #[serde(default)]
     pub cpus: Option<u32>,
-    /// Memory given to the buildkit builder when it is created, e.g. "8g".
     #[serde(default)]
     pub memory: Option<String>,
 }
 
-/// A named build target such as `local`, `dev` or `prod`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
-    /// `{{profile}}` platform override, e.g. `linux/amd64`.
     #[serde(default)]
     pub platform: Option<String>,
-    /// Whether images built for this profile are pushed.
     #[serde(default)]
     pub push: Option<bool>,
-    /// Value of `{{tag}}`.
     #[serde(default)]
     pub tag: Option<String>,
-    /// Value of `{{account}}`.
     #[serde(default)]
     pub account: Option<String>,
-    /// Value of `{{region}}`, overriding the project default.
     #[serde(default)]
     pub region: Option<String>,
-    /// Value of `{{registry}}`. Usually a host plus a trailing slash, and empty
-    /// for purely local profiles so the same image template yields `app:tag`.
     #[serde(default)]
     pub registry: Option<String>,
 }
 
-/// A private registry to authenticate against before pulling or pushing.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registry {
-    /// Registry host. Supports `{{...}}` interpolation.
     pub server: String,
     #[serde(default = "default_username")]
     pub username: String,
-    /// argv executed and piped to `container registry login --password-stdin`.
-    /// Credentials are never stored in the manifest.
     #[serde(rename = "passwordCmd")]
     pub password_cmd: Vec<String>,
 }
@@ -157,14 +127,10 @@ pub struct Secret {
 #[serde(deny_unknown_fields)]
 pub struct Build {
     pub name: String,
-    /// Path to the Dockerfile, relative to the resolved build root.
     pub dockerfile: String,
-    /// Build context, relative to the resolved build root. Defaults to ".".
     #[serde(default = "default_context")]
     pub context: String,
-    /// Image repository. Supports `{{...}}`, typically `{{registry}}name`.
     pub image: String,
-    /// Tags appended to `image`. Each supports `{{...}}`.
     #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
@@ -177,11 +143,8 @@ pub struct Build {
     pub labels: JsonMap,
     #[serde(default)]
     pub secrets: Vec<Secret>,
-    /// argv arrays run from the build root before building. A failure aborts.
     #[serde(default)]
     pub preflight: Vec<Vec<String>>,
-    /// argv arrays run from the build root after a successful push. A failure
-    /// aborts and is reported as an error.
     #[serde(rename = "postPush", default)]
     pub post_push: Vec<Vec<String>>,
 }
@@ -193,9 +156,7 @@ fn default_context() -> String {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Volume {
-    /// Logical name. The real volume is `<project>-<name>`.
     pub name: String,
-    /// Mount point inside the container.
     pub target: String,
 }
 
@@ -203,29 +164,21 @@ pub struct Volume {
 #[serde(deny_unknown_fields)]
 pub struct Service {
     pub name: String,
-    /// Full OCI reference, including the registry host.
     pub image: String,
-    /// Sizes the container's VM, not a cgroup. Each container is its own VM.
     #[serde(default)]
     pub cpus: Option<u32>,
-    /// Memory for the container's VM, e.g. "1g".
     #[serde(default)]
     pub memory: Option<String>,
-    /// `host:container` port publications.
     #[serde(default)]
     pub ports: Vec<String>,
     #[serde(default)]
     pub env: JsonMap,
     #[serde(default)]
     pub volumes: Vec<Volume>,
-    /// Extra argv appended after the image reference.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Polled through `container exec` until it exits 0. Apple `container` has
-    /// no healthcheck primitive, so readiness is implemented here.
     #[serde(rename = "readyCmd", default)]
     pub ready_cmd: Vec<String>,
-    /// Seconds before giving up on `readyCmd`. Start continues with a warning.
     #[serde(rename = "readyTimeout", default = "default_ready_timeout")]
     pub ready_timeout: u64,
 }
@@ -249,12 +202,10 @@ impl Manifest {
     }
 }
 
-/// A manifest plus where it came from.
 pub struct Project {
     pub name: String,
     pub file: PathBuf,
     pub manifest: Manifest,
-    /// The manifest exactly as written, for `ac <project> config`.
     pub raw: String,
 }
 
@@ -266,8 +217,6 @@ impl Project {
         format!("{}-{}", self.name, vol)
     }
 
-    /// Accept either the bare service name (`redis`) or the container name
-    /// (`noveum-redis`), since the latter is what `ac <p> ls` prints.
     pub fn normalize_service(&self, name: &str) -> String {
         name.strip_prefix(&format!("{}-", self.name))
             .unwrap_or(name)
@@ -280,8 +229,6 @@ impl Project {
             .is_some()
     }
 
-    /// Services an action applies to: all of them when none are named,
-    /// otherwise just the named ones, validated so a typo fails loudly.
     pub fn target_services(&self, names: &[String]) -> Result<Vec<String>> {
         if names.is_empty() {
             return Ok(self.manifest.service_names());
@@ -311,9 +258,6 @@ impl Project {
     }
 }
 
-/// Directories searched for manifests, highest priority first. User projects in
-/// `~/.config/ac/projects` shadow the ones bundled in the repo, so the repo
-/// stays cleanly updatable while remaining customisable.
 pub fn project_dirs(config_dir: &Path, ac_home: &Path) -> Vec<PathBuf> {
     vec![config_dir.join("projects"), ac_home.join("projects")]
 }
@@ -371,8 +315,6 @@ pub fn load_project_file(file: &Path, name: &str) -> Result<Project> {
     })
 }
 
-/// Load every discoverable project, skipping the ones that fail to parse so a
-/// single broken manifest cannot break daemon refcounting.
 pub fn load_all(config_dir: &Path, ac_home: &Path) -> Vec<Project> {
     project_names(config_dir, ac_home)
         .into_iter()
@@ -380,8 +322,6 @@ pub fn load_all(config_dir: &Path, ac_home: &Path) -> Vec<Project> {
         .collect()
 }
 
-/// Render a JSON value the way `jq -r` would: strings bare, everything else as
-/// compact JSON. Used for env values, build args and labels.
 pub fn json_scalar(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),

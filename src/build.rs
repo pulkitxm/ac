@@ -1,16 +1,3 @@
-//! Declarative image builds, pushes and rollout hooks.
-//!
-//! `ac` owns the container mechanics only. Anything organisation specific
-//! (verifying an AWS account, rolling out k8s deployments) is expressed as a
-//! hook: an argv array that is executed and checked for exit status. That keeps
-//! this file free of any AWS or Kubernetes knowledge.
-//!
-//! Precedence for every setting, highest first:
-//!   1. CLI flag           (--platform, --builder-cpus, ...)
-//!   2. profile            (.profiles.<name>)
-//!   3. build entry        (.builds[])
-//!   4. project default    (.builder, .region)
-
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -25,8 +12,6 @@ use crate::manifest::{json_scalar, Build, Project};
 use crate::style;
 use crate::{daemon, project};
 
-/// CLI overrides. `None` means "not given", so the next level of precedence
-/// wins.
 #[derive(Debug, Clone, Default)]
 pub struct BuildOverrides {
     pub profile: Option<String>,
@@ -50,24 +35,6 @@ impl BuildOverrides {
     }
 }
 
-// ------------------------------------------------------------- build root ---
-
-/// Resolve the directory builds run from. Order, highest priority first:
-///
-///   1. `--root <path>`         explicit, wins always
-///   2. `$AC_ROOT`              for scripts and agents
-///   3. the git worktree containing `$PWD`, when it contains the manifest's
-///      first declared dockerfile
-///   4. `$PWD`, when not inside a git repo at all and it contains every
-///      dockerfile the manifest declares
-///   5. `.root` from the manifest
-///   6. `$PWD`
-///
-/// Step 3 is what makes git worktrees work: running `ac <proj> build` from
-/// inside a worktree builds THAT tree, not the path baked into the manifest,
-/// without needing a second manifest per worktree. "Contains the dockerfile"
-/// means the tree actually holds the file the manifest references, so an
-/// unrelated repo never hijacks the build.
 pub fn resolve_root(ctx: &Ctx, proj: &Project, ov: &BuildOverrides) -> Result<PathBuf> {
     if let Some(r) = &ov.root {
         return std::fs::canonicalize(r)
@@ -83,29 +50,21 @@ pub fn resolve_root(ctx: &Ctx, proj: &Project, ov: &BuildOverrides) -> Result<Pa
     let cwd = std::env::current_dir()?;
 
     match git_toplevel(&cwd) {
-        Some(top) => {
-            // Exactly the bash rule: the FIRST declared dockerfile acts as the
-            // marker that this tree really is the project.
-            match proj.manifest.builds.first().map(|b| b.dockerfile.clone()) {
-                Some(m) if !m.is_empty() => {
-                    if top.join(&m).exists() {
-                        return Ok(top);
-                    }
-                }
-                _ => {
-                    // No builds declared: any git tree whose basename matches
-                    // the manifest root's basename.
-                    if !manifest_root.is_empty()
-                        && top.file_name() == Path::new(&manifest_root).file_name()
-                    {
-                        return Ok(top);
-                    }
+        Some(top) => match proj.manifest.builds.first().map(|b| b.dockerfile.clone()) {
+            Some(m) if !m.is_empty() => {
+                if top.join(&m).exists() {
+                    return Ok(top);
                 }
             }
-        }
+            _ => {
+                if !manifest_root.is_empty()
+                    && top.file_name() == Path::new(&manifest_root).file_name()
+                {
+                    return Ok(top);
+                }
+            }
+        },
         None => {
-            // Not in a git repo at all. Accept the current directory when it
-            // holds every dockerfile the manifest references.
             if !proj.manifest.builds.is_empty()
                 && proj
                     .manifest
@@ -145,10 +104,6 @@ fn git_toplevel(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-// ----------------------------------------------------------- interpolation ---
-
-/// The values `{{...}}` placeholders expand to. Computed once per build run, so
-/// every image in a parallel build gets the same timestamp.
 #[derive(Debug, Clone, Default)]
 pub struct Vars {
     pub profile: String,
@@ -173,9 +128,6 @@ pub fn vars_for(proj: &Project, profile: &str, root: &Path) -> Vars {
         .or_else(|| proj.manifest.region.clone())
         .unwrap_or_else(|| "us-east-1".to_string());
 
-    // {{registry}} is the host plus slash prefix, empty for purely local
-    // profiles so the same image template yields "app:tag" locally and
-    // "<acct>.dkr.ecr.<region>.amazonaws.com/app:tag" when pushing.
     let registry = p
         .and_then(|x| x.registry.clone())
         .unwrap_or_default()
@@ -197,7 +149,6 @@ pub fn vars_for(proj: &Project, profile: &str, root: &Path) -> Vars {
         v.git_sha = git(root, &["rev-parse", "HEAD"]);
         v.git_short_sha = git(root, &["rev-parse", "--short", "HEAD"]);
         v.git_branch = git(root, &["rev-parse", "--abbrev-ref", "HEAD"]);
-        // A dirty tree must never overwrite the image CI built for that commit.
         if !git(root, &["status", "--porcelain"]).is_empty() {
             v.git_dirty_suffix = format!("-local-{}", v.timestamp);
         }
@@ -235,8 +186,6 @@ fn git(root: &Path, args: &[&str]) -> String {
         .unwrap_or_default()
 }
 
-/// Expand `{{...}}` placeholders. This is what keeps manifests generic: tagging
-/// rules live in the manifest as templates rather than in this code.
 pub fn interpolate(s: &str, v: &Vars) -> String {
     if !s.contains("{{") {
         return s.to_string();
@@ -253,8 +202,6 @@ pub fn interpolate(s: &str, v: &Vars) -> String {
         .replace("{{git.dirtySuffix}}", &v.git_dirty_suffix)
         .replace("{{timestamp}}", &v.timestamp)
 }
-
-// ---------------------------------------------------------------- builder ---
 
 #[derive(serde::Deserialize)]
 struct BuilderResources {
@@ -273,7 +220,6 @@ struct BuilderEntry {
     configuration: Option<BuilderConfiguration>,
 }
 
-/// Parse a memory string such as `8g`, `8gb`, `8192m` or a bare megabyte count.
 pub fn memory_to_mb(s: &str) -> Option<u64> {
     let t = s.trim().to_ascii_lowercase();
     let (num, mult) = if let Some(n) = t.strip_suffix("gb") {
@@ -290,11 +236,6 @@ pub fn memory_to_mb(s: &str) -> Option<u64> {
     num.trim().parse::<u64>().ok().map(|n| n * mult)
 }
 
-/// The buildkit builder is a long-lived container shared by every build, and it
-/// only reads its cpu and memory settings when it is CREATED. Passing -c/-m to
-/// a build while it is already running is silently ignored, so resizing means
-/// stopping it first. The stop happens without asking, but is logged loudly
-/// because it discards the builder's warm layer cache.
 pub fn ensure_builder(ctx: &Ctx, want_cpus: Option<u32>, want_mem: Option<&str>) {
     if want_cpus.is_none() && want_mem.is_none() {
         return;
@@ -305,7 +246,7 @@ pub fn ensure_builder(ctx: &Ctx, want_cpus: Option<u32>, want_mem: Option<&str>)
         .silent()
         .stdout()
     else {
-        return; // no builder yet: it gets created with the right size
+        return;
     };
     let Ok(entries) = serde_json::from_str::<Vec<BuilderEntry>>(&text) else {
         return;
@@ -346,21 +287,10 @@ first and its layer cache is discarded.",
     thread::sleep(Duration::from_secs(2));
 }
 
-// --------------------------------------------------------------- reporter ---
-
-/// Where a single build's output goes.
-///
-/// Sequential builds inherit stdio so buildkit's own progress rendering works.
-/// Parallel builds stream through an `indicatif` MultiProgress, one spinner per
-/// image, with every child line prefixed by the build name so the interleaved
-/// output stays readable.
 struct Reporter<'a> {
     ctx: &'a Ctx,
     name: String,
-    /// Present in parallel mode: child output is captured and prefixed.
     multi: Option<&'a MultiProgress>,
-    /// Present only on a TTY: a spinner per image. Progress is auto-disabled
-    /// when stdout is not a terminal.
     bar: Option<ProgressBar>,
 }
 
@@ -398,8 +328,6 @@ impl<'a> Reporter<'a> {
         }
     }
 
-    /// Run a command. Sequential builds inherit stdio so buildkit renders its
-    /// own progress; parallel builds capture and prefix every line.
     fn run(&self, runner: Runner<'_>) -> Result<bool> {
         let Some(multi) = self.multi else {
             return Ok(runner.status()?.success());
@@ -442,11 +370,6 @@ impl<'a> Reporter<'a> {
     }
 }
 
-// ------------------------------------------------------------------ hooks ---
-
-/// Run a list of argv arrays from the manifest, from the build root. Returns an
-/// error on the first failure, and callers treat that as fatal: a failing
-/// preflight or postPush aborts immediately and is reported as an error.
 fn run_hooks(
     rep: &Reporter,
     root: &Path,
@@ -472,9 +395,6 @@ fn run_hooks(
     Ok(())
 }
 
-// ------------------------------------------------------------------ build ---
-
-/// One `container build` invocation, resolved through the precedence chain.
 struct Plan {
     args: Vec<String>,
     tags: Vec<String>,
@@ -679,8 +599,6 @@ pub fn project_build(
         .filter_map(|t| proj.manifest.build(t).cloned())
         .collect();
 
-    // Only authenticate when something is actually going to be pushed, and only
-    // to the registries the images being pushed actually come from.
     if ov.push.unwrap_or_else(|| profile_push(proj, &profile)) {
         let images: Vec<String> = entries
             .iter()
@@ -716,8 +634,6 @@ fn run_parallel(
     ov: &BuildOverrides,
     vars: &Vars,
 ) -> Result<()> {
-    // Spinners only make sense on a terminal. Without one the output is still
-    // captured and prefixed, just without the live status line.
     let multi = if ctx.color {
         MultiProgress::new()
     } else {

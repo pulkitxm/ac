@@ -1,9 +1,3 @@
-//! JSON Schema for a project manifest, emitted by `ac schema`.
-//!
-//! Kept in lockstep with `manifest.rs` by the round-trip test at the bottom of
-//! this file, which checks that every field named in the schema also exists on
-//! the typed manifest.
-
 use serde_json::{json, Value};
 
 pub fn manifest_schema() -> Value {
@@ -203,8 +197,6 @@ pub fn manifest_schema() -> Value {
 mod tests {
     use super::*;
 
-    /// A manifest built straight from the schema's own examples must parse
-    /// against the typed manifest, which keeps the two from drifting.
     #[test]
     fn schema_example_parses() {
         let s = manifest_schema();

@@ -1,34 +1,12 @@
-# Makefile - the entry point for building and testing the Rust `ac`.
-#
-# The Rust toolchain for this machine lives on an external SSD rather than in
-# ~/.cargo, so every target exports it. That is the whole reason this file
-# exists: `cargo build` on its own will not find a compiler.
-#
-# `make` with no target prints the help below.
-
-# ------------------------------------------------------------- toolchain ---
-
-# Note the unquoted spaces: make keeps them, and `export` hands the value to
-# the recipe's environment intact.
 export CARGO_HOME  := /Volumes/Sandisk SSD/.toolchains/cargo
 export RUSTUP_HOME := /Volumes/Sandisk SSD/.toolchains/rustup
 export PATH        := $(CARGO_HOME)/bin:$(PATH)
 
-# Spelled out in full rather than relying on PATH. macOS ships GNU Make 3.81,
-# which execs a recipe line directly when it holds no shell metacharacters, and
-# that direct exec searches the PATH make itself started with, not the one
-# exported above. An absolute path sidesteps it. The quotes at every use site
-# matter too: the toolchain path contains a space.
 CARGO := $(CARGO_HOME)/bin/cargo
 
-# Where `make install` puts the binary. Override either to install elsewhere or
-# under another name, for example to keep the bash `ac` on PATH at the same
-# time:  make install BIN_NAME=ac-rs
 BIN_DIR  ?= $(HOME)/.local/bin
 BIN_NAME ?= ac
 
-# Generated shell completions land here rather than in completions/, which
-# holds the hand written ones belonging to the bash implementation.
 COMPLETION_DIR := completions/rust
 
 .DEFAULT_GOAL := help

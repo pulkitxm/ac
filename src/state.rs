@@ -1,10 +1,3 @@
-//! Querying the daemon for container state.
-//!
-//! `container ls -a --format json` returns
-//! `[{id, status:{state, networks:[{ipv4Address}]}}]`, which is everything the
-//! rest of the tool needs. It is fetched once per logical operation rather than
-//! once per service, so the echoed output stays readable.
-
 use serde::Deserialize;
 
 use crate::ctx::Ctx;
@@ -32,26 +25,20 @@ struct RawContainer {
 #[derive(Debug, Clone)]
 pub struct ContainerInfo {
     pub id: String,
-    /// `running`, `stopped`, `exited`, ... or `absent` when not present at all.
     pub state: String,
     pub ip: Option<String>,
 }
 
-/// A snapshot of every container the daemon knows about.
 #[derive(Debug, Clone, Default)]
 pub struct Snapshot {
     pub items: Vec<ContainerInfo>,
 }
 
 impl Snapshot {
-    /// Query the daemon. A failure (usually "daemon not running") yields an
-    /// empty snapshot rather than an error, matching the bash behaviour where
-    /// everything then reads as `absent`.
     pub fn query(ctx: &Ctx) -> Snapshot {
         Self::query_inner(ctx, false)
     }
 
-    /// Same, without echoing the command. Used by polling loops.
     pub fn query_silent(ctx: &Ctx) -> Snapshot {
         Self::query_inner(ctx, true)
     }
@@ -99,7 +86,6 @@ impl Snapshot {
             .unwrap_or_else(|| "absent".to_string())
     }
 
-    /// The IP of a running container. Stopped containers have no address.
     pub fn ip(&self, name: &str) -> Option<String> {
         self.get(name)
             .filter(|c| c.state == "running")
@@ -115,9 +101,6 @@ impl Snapshot {
     }
 }
 
-/// Every container belonging to any known project that is currently running.
-/// This is what the supervisor counts to decide when the daemon can go away,
-/// which is why it spans all projects rather than just the current one.
 pub fn ac_running_containers(ctx: &Ctx, silent: bool) -> Vec<String> {
     let projects = crate::manifest::load_all(&ctx.config_dir, &ctx.ac_home);
     let mut owned: Vec<String> = Vec::new();
