@@ -136,6 +136,14 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         TopCommand::Schema => ctx.emit_json(&schema::manifest_schema()),
+        TopCommand::Guide { topic } => {
+            let text = match topic {
+                Some(cli::GuideTopic::Claude) => include_str!("../docs/claude-snippet.md"),
+                None => include_str!("../docs/guide.md"),
+            };
+            print!("{text}");
+            Ok(())
+        }
         TopCommand::Completions { shell } => {
             let mut cmd = Cli::command();
             let sh = match shell {
