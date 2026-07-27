@@ -31,6 +31,7 @@ export AC_HOME
 . "$AC_HOME/lib/daemon.sh"
 . "$AC_HOME/lib/supervisor.sh"
 . "$AC_HOME/lib/project.sh"
+. "$AC_HOME/lib/build.sh"
 
 require jq
 require container
@@ -81,7 +82,8 @@ ${C_BOLD}USAGE${C_RESET}
 
 ${C_BOLD}PROJECT ACTIONS${C_RESET}  (most take optional service names; default is all)
   start [svc...]        start services
-  stop [svc...]         stop and remove services
+  stop [svc...]         stop services, keeping them for a fast restart
+  down [svc...]         stop AND remove containers (volumes/data survive)
   restart [svc...]      stop then start
   ls, ps, status        per-service state, IP and published ports
   logs [-f] [-n N] <svc>  show logs (-f follows, --boot for the boot log)
@@ -97,8 +99,20 @@ ${C_BOLD}PROJECT ACTIONS${C_RESET}  (most take optional service names; default i
   port [svc]            published port mappings
   ip [svc]              container IPs
   env <svc>             environment variables from the manifest
+  build [name...]       build images; see BUILD FLAGS below
   login                 authenticate to the project's private registries
   config                the project manifest
+
+${C_BOLD}BUILD FLAGS${C_RESET}  (each overrides the manifest)
+  -P, --profile <name>  profile to build for (default: local)
+  --root <path>         build from this tree (default: current git worktree)
+  --platform <os/arch>  e.g. linux/amd64, linux/arm64
+  --push / --no-push    override the profile's push setting
+  --no-cache            ignore the layer cache
+  --target <stage>      Dockerfile stage
+  --builder-cpus <n>    resize the shared buildkit builder
+  --builder-memory <m>  e.g. 8g
+  --sequential          build one at a time instead of in parallel
 
 ${C_BOLD}COMMANDS${C_RESET}
   ls, projects          list available projects
@@ -175,14 +189,44 @@ main() {
   shift 2 2>/dev/null || shift 1
 
   case "$action" in
-    start)    project_start "$proj" "$@" ;;
+    start)
+      if [ "${1:-}" = "--recreate" ]; then AC_F_RECREATE=1; shift; fi
+      project_start "$proj" "$@" ;;
     stop)     project_stop "$proj" "$@" ;;
+    down)     project_down "$proj" "$@" ;;
     restart)  project_stop "$proj" "$@"; project_start "$proj" "$@" ;;
     ls|ps|status) project_status "$proj" ;;
     pull)     project_pull "$proj" "$@" ;;
     images)   project_images "$proj" ;;
     config)   proj_json "$proj" ;;
-    login)    daemon_ensure; project_login "$proj" ;;
+    login)    daemon_ensure; project_login "$proj" "${AC_PROFILE:-local}" ;;
+
+    build)
+      # CLI flags take precedence over profile and manifest values.
+      local bargs=()
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -P|--profile)     AC_PROFILE="$2"; shift 2 ;;
+          --profile=*)      AC_PROFILE="${1#*=}"; shift ;;
+          --root)           AC_F_ROOT="$2"; shift 2
+                            [ -d "$AC_F_ROOT" ] || die "--root does not exist: $AC_F_ROOT" ;;
+          --root=*)         AC_F_ROOT="${1#*=}"; shift
+                            [ -d "$AC_F_ROOT" ] || die "--root does not exist: $AC_F_ROOT" ;;
+          --platform)       AC_F_PLATFORM="$2"; shift 2 ;;
+          --platform=*)     AC_F_PLATFORM="${1#*=}"; shift ;;
+          --target)         AC_F_TARGET="$2"; shift 2 ;;
+          --builder-cpus)   AC_F_BCPUS="$2"; shift 2 ;;
+          --builder-memory) AC_F_BMEM="$2"; shift 2 ;;
+          --push)           AC_F_PUSH="true"; shift ;;
+          --no-push)        AC_F_PUSH="false"; shift ;;
+          --no-cache)       AC_F_NOCACHE=1; shift ;;
+          --sequential)     AC_F_SEQUENTIAL=1; shift ;;
+          -*)               die "unknown build flag: $1" ;;
+          *)                bargs+=("$1"); shift ;;
+        esac
+      done
+      project_build "$proj" ${bargs[@]+"${bargs[@]}"}
+      ;;
 
     logs)
       # Flags and the service name may appear in any order, so pick out the
