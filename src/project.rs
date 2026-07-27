@@ -305,6 +305,7 @@ pub fn stop(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
 
+    let mut stopped = 0;
     for svc in &targets {
         let cname = proj.container_name(svc);
         match snap.state(&cname).as_str() {
@@ -313,9 +314,14 @@ pub fn stop(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
                 ctx.info(&format!("stopping {cname}"));
                 ctx.container(["stop", &cname]).quiet_ok();
                 ctx.ok(&format!("{cname} stopped"));
+                stopped += 1;
             }
             other => ctx.dim(&format!("  {cname} already {other}")),
         }
+    }
+
+    if stopped == 0 {
+        ctx.dim("nothing to stop, no service was running");
     }
 
     supervisor::settle(ctx)
@@ -325,10 +331,12 @@ pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
 
+    let mut removed = 0;
     for svc in &targets {
         let cname = proj.container_name(svc);
         let state = snap.state(&cname);
         if state == "absent" {
+            ctx.dim(&format!("  {cname} not created"));
             continue;
         }
         if state == "running" {
@@ -337,6 +345,11 @@ pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
         }
         ctx.container(["rm", &cname]).quiet_ok();
         ctx.ok(&format!("{cname} removed"));
+        removed += 1;
+    }
+
+    if removed == 0 {
+        ctx.dim("nothing to remove, every service was already absent");
     }
 
     supervisor::settle(ctx)

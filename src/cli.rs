@@ -490,6 +490,13 @@ pub struct BuildArgs {
     #[arg(long)]
     pub sequential: bool,
 
+    /// Resolve and print what would be built, without building or pushing.
+    ///
+    /// Touches nothing: no daemon, no builder, no registry login. Pair with
+    /// --json to inspect the resolved plan from a script.
+    #[arg(long)]
+    pub dry_run: bool,
+
     /// Builds to run, by name. Empty means every build in the manifest.
     pub names: Vec<String>,
 }

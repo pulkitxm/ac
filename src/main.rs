@@ -774,6 +774,7 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                 builder_cpus: args.builder_cpus,
                 builder_memory: args.builder_memory.clone(),
                 sequential: args.sequential,
+                dry_run: args.dry_run,
             };
             build::project_build(ctx, proj, &args.names, &ov)
         }
