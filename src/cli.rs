@@ -94,7 +94,7 @@ pub enum TopCommand {
     ///
     /// With no subcommand this lists every image, so the old `ac images`
     /// keeps working.
-    #[command(alias = "images")]
+    #[command(visible_alias = "images")]
     Image {
         #[command(subcommand)]
         action: Option<ImageAction>,
@@ -103,7 +103,7 @@ pub enum TopCommand {
     /// Manage named volumes across the whole daemon, docker volume style.
     ///
     /// For the volumes one project declares, use `ac <project> volumes`.
-    #[command(alias = "volumes")]
+    #[command(visible_alias = "volumes")]
     Volume {
         #[command(subcommand)]
         action: Option<VolumeAction>,
@@ -113,7 +113,7 @@ pub enum TopCommand {
     ///
     /// Every container joins `default` unless told otherwise. Networks other
     /// than the default require macOS 26 or newer.
-    #[command(alias = "networks")]
+    #[command(visible_alias = "networks")]
     Network {
         #[command(subcommand)]
         action: Option<NetworkAction>,
@@ -248,7 +248,7 @@ pub enum Action {
     ///   ac noveum start
     ///   ac noveum up redis clickhouse
     ///   ac noveum start --recreate postgres
-    #[command(alias = "up")]
+    #[command(visible_alias = "up")]
     Start {
         /// Delete and recreate containers instead of restarting them in place.
         /// Named volumes and their data survive.
