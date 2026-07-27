@@ -5,12 +5,12 @@ A small CLI for running project-scoped service stacks on Apple's
 absence of `docker compose`.
 
 ```console
-$ ac demo start
+$ ac shop start
 ==> starting container daemon
   ok daemon started (owned by ac)
-==> starting demo-postgres
-  waiting for demo-postgres .. ready
-  ok demo-postgres up  192.168.64.2/24
+==> starting shop-postgres
+  waiting for shop-postgres .. ready
+  ok shop-postgres up  192.168.64.2/24
 ...
 ```
 
@@ -31,7 +31,7 @@ supervisor stops the daemon and exits.
 Ownership lives in a file rather than in memory, so a second `ac` invocation
 from a different terminal makes the same decision.
 
-Shutdown refcounts across **all** projects: stopping `demo` while another
+Shutdown refcounts across **all** projects: stopping `shop` while another
 project is still up leaves the daemon running.
 
 ## Install
@@ -142,7 +142,7 @@ its own containers when deciding whether the daemon can be shut down.
 - Named volumes are real ext4 block devices, not host directories, so every
   fresh volume contains a `lost+found`. Anything that insists on an empty
   directory will refuse to start. Postgres is the common case, which is why the
-  demo manifest sets `PGDATA` to a subdirectory of the mount point:
+  shop manifest sets `PGDATA` to a subdirectory of the mount point:
 
   ```
   initdb: error: directory "/var/lib/postgresql/data" exists but is not empty

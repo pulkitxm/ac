@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ac - a tiny project runner for Apple `container`.
 #
-#   ac demo start      bring a project's containers up
-#   ac demo stop       tear them down (and the daemon, if ac started it)
+#   ac shop start      bring a project's containers up
+#   ac shop stop       tear them down (and the daemon, if ac started it)
 #
 # See README.md for the daemon ownership rules.
 
