@@ -4,6 +4,56 @@ use crate::cli::{ImageAction, NetworkAction, RegistryAction, SystemAction, Volum
 use crate::ctx::Ctx;
 use crate::{daemon, manifest, supervisor};
 
+fn host_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "amd64",
+        other => other,
+    }
+}
+
+fn short_ref(full: &str) -> (String, String) {
+    let (repo, tag) = match full.rfind(':') {
+        Some(i) if !full[i + 1..].contains('/') => (&full[..i], &full[i + 1..]),
+        _ => (full, "latest"),
+    };
+    let repo = repo
+        .strip_prefix("docker.io/library/")
+        .or_else(|| repo.strip_prefix("docker.io/"))
+        .unwrap_or(repo);
+    (repo.to_string(), tag.to_string())
+}
+
+fn fmt_size(bytes: u64) -> String {
+    let b = bytes as f64;
+    if b >= 1e9 {
+        format!("{:.2} GB", b / 1e9)
+    } else if b >= 1e6 {
+        format!("{:.1} MB", b / 1e6)
+    } else if b >= 1e3 {
+        format!("{:.1} kB", b / 1e3)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn fmt_date(iso: &str) -> String {
+    let mut out: String = iso.chars().take(19).collect();
+    if let Some(i) = out.find('T') {
+        out.replace_range(i..i + 1, " ");
+    }
+    out
+}
+
+fn print_pretty_json(ctx: &Ctx, args: Vec<String>) -> Result<()> {
+    let text = ctx.container(args).stdout()?;
+    match serde_json::from_str::<serde_json::Value>(&text) {
+        Ok(v) => println!("{}", serde_json::to_string_pretty(&v)?),
+        Err(_) => print!("{text}"),
+    }
+    Ok(())
+}
+
 fn exit_ok(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         Ok(())
@@ -32,7 +82,7 @@ fn passthrough_raw_json(ctx: &Ctx, args: Vec<String>) -> Result<()> {
         let v: serde_json::Value = serde_json::from_str(&text)?;
         ctx.emit_json(&v)
     } else {
-        exit_ok(ctx.container(args).status()?)
+        print_pretty_json(ctx, args)
     }
 }
 
@@ -169,7 +219,7 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
         ids: false,
     };
     match action.unwrap_or(&default) {
-        ImageAction::Ls { verbose: _, ids } => {
+        ImageAction::Ls { verbose, ids } => {
             if *ids {
                 daemon::require(ctx)?;
                 if ctx.json {
@@ -183,7 +233,62 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
                 return passthrough_json(ctx, &["image", "ls"]);
             }
             daemon::require(ctx)?;
-            exit_ok(ctx.container(["image", "ls", "--verbose"]).status()?)
+            if *verbose {
+                return exit_ok(ctx.container(["image", "ls", "--verbose"]).status()?);
+            }
+            let text = ctx.container(["image", "ls", "--format", "json"]).stdout()?;
+            let raw: Vec<serde_json::Value> = serde_json::from_str(&text)?;
+            let mut rows: Vec<(String, String, String, u64, String)> = raw
+                .iter()
+                .filter_map(|e| {
+                    let full = e.get("configuration")?.get("name")?.as_str()?;
+                    let (repo, tag) = short_ref(full);
+                    let variants = e.get("variants")?.as_array()?;
+                    let pick = variants
+                        .iter()
+                        .find(|v| {
+                            v.get("platform")
+                                .and_then(|p| p.get("architecture"))
+                                .and_then(|a| a.as_str())
+                                == Some(host_arch())
+                        })
+                        .or_else(|| variants.first())?;
+                    let arch = pick
+                        .get("platform")
+                        .and_then(|p| p.get("architecture"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("-")
+                        .to_string();
+                    let size = pick.get("size").and_then(|x| x.as_u64()).unwrap_or(0);
+                    let created = pick
+                        .get("config")
+                        .and_then(|c| c.get("created"))
+                        .and_then(|x| x.as_str())
+                        .or_else(|| {
+                            e.get("configuration")
+                                .and_then(|c| c.get("creationDate"))
+                                .and_then(|x| x.as_str())
+                        })
+                        .map(fmt_date)
+                        .unwrap_or_default();
+                    Some((repo, tag, arch, size, created))
+                })
+                .collect();
+            rows.sort();
+            let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
+            let tag_w = rows.iter().map(|r| r.1.len()).max().unwrap_or(3).max(3);
+            ctx.log(&crate::style::bold(&format!(
+                "{:<name_w$}  {:<tag_w$}  {:<7} {:>9}  {}",
+                "NAME", "TAG", "ARCH", "SIZE", "CREATED"
+            )));
+            for (repo, tag, arch, size, created) in &rows {
+                ctx.log(&format!(
+                    "{repo:<name_w$}  {tag:<tag_w$}  {arch:<7} {:>9}  {created}",
+                    fmt_size(*size)
+                ));
+            }
+            ctx.dim("one row per tag, sized for this machine; every variant: ac image ls -v");
+            Ok(())
         }
         ImageAction::Pull {
             reference,
@@ -267,7 +372,39 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
 
 pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
     match action.unwrap_or(&VolumeAction::Ls) {
-        VolumeAction::Ls => passthrough_json(ctx, &["volume", "ls"]),
+        VolumeAction::Ls => {
+            if ctx.json {
+                return passthrough_json(ctx, &["volume", "ls"]);
+            }
+            daemon::require(ctx)?;
+            let text = ctx.container(["volume", "ls", "--format", "json"]).stdout()?;
+            let raw: Vec<serde_json::Value> = serde_json::from_str(&text)?;
+            let mut rows: Vec<(String, String, String, String)> = raw
+                .iter()
+                .filter_map(|e| {
+                    let c = e.get("configuration")?;
+                    Some((
+                        c.get("name")?.as_str()?.to_string(),
+                        c.get("driver").and_then(|x| x.as_str()).unwrap_or("-").to_string(),
+                        c.get("format").and_then(|x| x.as_str()).unwrap_or("-").to_string(),
+                        c.get("creationDate")
+                            .and_then(|x| x.as_str())
+                            .map(fmt_date)
+                            .unwrap_or_default(),
+                    ))
+                })
+                .collect();
+            rows.sort();
+            let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
+            ctx.log(&crate::style::bold(&format!(
+                "{:<name_w$}  {:<7} {:<7} {}",
+                "NAME", "DRIVER", "FORMAT", "CREATED"
+            )));
+            for (name, driver, format, created) in &rows {
+                ctx.log(&format!("{name:<name_w$}  {driver:<7} {format:<7} {created}"));
+            }
+            Ok(())
+        }
         VolumeAction::Create { name } => passthrough(
             ctx,
             vec!["volume".to_string(), "create".into(), name.clone()],

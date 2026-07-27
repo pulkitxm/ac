@@ -225,7 +225,7 @@ pub fn start_service(ctx: &Ctx, proj: &Project, name: &str, recreate: bool) -> R
             return Ok(());
         }
         ctx.info(&format!("stopping {cname} to recreate it"));
-        ctx.container(["stop", &cname]).quiet_ok();
+        stop_container(ctx, &cname, None);
     }
 
     if state == "running" || state == "stopped" || state == "exited" || state == "created" {
@@ -557,6 +557,64 @@ fn stop_args(cname: &str, time: Option<u32>) -> Vec<String> {
     args
 }
 
+fn kill_runtime_shim(cname: &str) -> bool {
+    let out = std::process::Command::new("pgrep")
+        .args(["-f", &format!("container-runtime-linux.*--uuid {cname}$")])
+        .output();
+    let Ok(out) = out else {
+        return false;
+    };
+    let pids: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    if pids.is_empty() {
+        return false;
+    }
+    for pid in &pids {
+        std::process::Command::new("/bin/kill")
+            .args(["-9", pid])
+            .status()
+            .ok();
+    }
+    true
+}
+
+pub fn stop_container(ctx: &Ctx, cname: &str, time: Option<u32>) -> bool {
+    let grace = u64::from(time.unwrap_or(5));
+    let deadline = (grace * 2).max(20);
+    if ctx
+        .container(stop_args(cname, time))
+        .quiet_ok_timeout(deadline)
+        == Some(true)
+        && Snapshot::query_silent(ctx).state(cname) != "running"
+    {
+        return true;
+    }
+    if Snapshot::query_silent(ctx).state(cname) != "running" {
+        return true;
+    }
+
+    ctx.warn(&format!(
+        "{cname} ignored container stop; escalating to SIGKILL"
+    ));
+    ctx.container(["kill", "--signal", "KILL", cname])
+        .quiet_ok_timeout(10);
+    if Snapshot::query_silent(ctx).state(cname) != "running" {
+        return true;
+    }
+
+    ctx.warn(&format!(
+        "{cname}'s runtime shim is wedged (known Apple container issue); terminating it"
+    ));
+    if !kill_runtime_shim(cname) {
+        return false;
+    }
+    thread::sleep(Duration::from_secs(2));
+    Snapshot::query_silent(ctx).state(cname) != "running"
+}
+
 pub fn stop(ctx: &Ctx, proj: &Project, services: &[String], time: Option<u32>) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
@@ -568,7 +626,7 @@ pub fn stop(ctx: &Ctx, proj: &Project, services: &[String], time: Option<u32>) -
             "absent" => ctx.dim(&format!("  {cname} not created")),
             "running" => {
                 ctx.info(&format!("stopping {cname}"));
-                ctx.container(stop_args(&cname, time)).quiet_ok();
+                stop_container(ctx, &cname, time);
                 stopped.push(cname);
             }
             other => ctx.dim(&format!("  {cname} already {other}")),
@@ -617,7 +675,7 @@ pub fn down(
         }
         if state == "running" {
             ctx.info(&format!("stopping {cname}"));
-            ctx.container(stop_args(&cname, time)).quiet_ok();
+            stop_container(ctx, &cname, time);
         }
         ctx.container(["rm", &cname]).quiet_ok();
         ctx.ok(&format!("{cname} removed"));

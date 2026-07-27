@@ -98,6 +98,9 @@ daemon stopped: `ac <project> services`, `ac <project> builds`,
    follow-up steps on it.
 5. `container run` can exit non-zero even though the container started. ac
    already re-checks observed state before declaring failure.
+6. A container's runtime shim can wedge, ignoring stop and kill. `ac stop`
+   escalates automatically: bounded stop, then SIGKILL, then terminating the
+   wedged shim, and only reports success once the container is observed down.
 
 ## Builds
 

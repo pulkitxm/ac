@@ -415,8 +415,11 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     "absent" => ctx.dim(&format!("  {cname} not created")),
                     "running" => {
                         ctx.info(&format!("stopping {cname}"));
-                        ctx.container(["stop", &cname]).quiet_ok();
-                        ctx.ok(&format!("{cname} stopped"));
+                        if project::stop_container(ctx, &cname, None) {
+                            ctx.ok(&format!("{cname} stopped"));
+                        } else {
+                            ctx.warn(&format!("{cname} would not stop"));
+                        }
                     }
                     other => ctx.dim(&format!("  {cname} already {other}")),
                 }

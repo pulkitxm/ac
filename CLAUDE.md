@@ -410,8 +410,12 @@ Hard won, do not rediscover:
   stall too. Prefer `exec` with shell redirection, or `export`. `ac` passes
   `cp` through and cannot mask this.
 - **A single container's exec channel can wedge under load**, taking every
-  `exec`-based feature with it (readiness probes, `top`, `stats`). `ac` bounds
-  its own probes with kill deadlines; a bare `ac <p> exec` into a wedged
+  `exec`-based feature with it (readiness probes, `top`, `stats`), and a
+  wedged container also ignores `container stop` and `container kill`. `ac`
+  bounds its own probes with kill deadlines, and `stop`/`down`/`restart`
+  escalate: bounded `container stop`, then SIGKILL, then terminating that
+  container's own `container-runtime-linux` shim (matched by `--uuid`), so
+  a wedged container still comes down. A bare `ac <p> exec` into a wedged
   container will still block until you Ctrl-C.
 - **Named volumes are real ext4 devices**, so a fresh one already contains
   `lost+found`. Postgres refuses to initialise into a non-empty directory, hence

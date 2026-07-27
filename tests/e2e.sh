@@ -425,7 +425,10 @@ print('ok' if d.get('daemon',{}).get('running') is True else 'bad:'+str(d))
   "$AC" system stop >/dev/null 2>&1
   check "l7 system stop refuses to touch an external daemon" "$(daemon_up && echo yes || echo no)" "yes"
 
-  check_contains "l8 image ls shows sizes by default" "$("$AC" image ls 2>/dev/null)" "FULL SIZE"
+  img_out=$("$AC" image ls 2>/dev/null)
+  check_contains "l8 image ls shows sizes by default" "$img_out" "SIZE"
+  check "l8b one row per tag by default" "$(printf '%s' "$img_out" | grep -c 'alpine  *3.20')" "1"
+  check_contains "l8c -v expands per-variant detail" "$("$AC" image ls -v 2>/dev/null)" "FULL SIZE"
   check_contains "l9 ps -q prints bare names" "$("$AC" ps -q 2>/dev/null)" "actest1-alpha"
   check_contains "l10 ps table attributes projects" "$("$AC" ps 2>/dev/null | head -1)" "PROJECT"
   got=$("$AC" ps --format json 2>/dev/null | python3 -c "
