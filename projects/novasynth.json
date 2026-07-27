@@ -1,0 +1,54 @@
+{
+  "name": "novasynth",
+  "description": "Noveum / NovaSynth local backing services (postgres, clickhouse, redis)",
+  "services": [
+    {
+      "name": "postgres",
+      "image": "docker.io/library/postgres:16-alpine",
+      "cpus": 2,
+      "memory": "1g",
+      "ports": ["5433:5432"],
+      "env": {
+        "POSTGRES_USER": "user",
+        "POSTGRES_PASSWORD": "pass",
+        "POSTGRES_DB": "postgres"
+      },
+      "volumes": [
+        { "name": "postgres-data", "target": "/var/lib/postgresql/data" }
+      ],
+      "readyCmd": ["pg_isready", "-U", "user", "-d", "postgres"],
+      "readyTimeout": 90
+    },
+    {
+      "name": "redis",
+      "image": "docker.io/redis/redis-stack:latest",
+      "cpus": 2,
+      "memory": "1g",
+      "ports": ["6379:6379", "8001:8001"],
+      "env": {
+        "REDIS_ARGS": "--appendonly yes --dir /data"
+      },
+      "volumes": [
+        { "name": "redis-data", "target": "/data" }
+      ],
+      "readyCmd": ["redis-cli", "ping"],
+      "readyTimeout": 90
+    },
+    {
+      "name": "clickhouse",
+      "image": "docker.io/clickhouse/clickhouse-server:24.12",
+      "cpus": 4,
+      "memory": "4g",
+      "ports": ["8124:8123", "9000:9000"],
+      "env": {
+        "CLICKHOUSE_SKIP_USER_SETUP": "1",
+        "CLICKHOUSE_DB": "default"
+      },
+      "volumes": [
+        { "name": "clickhouse-data", "target": "/var/lib/clickhouse" }
+      ],
+      "readyCmd": ["clickhouse-client", "--query", "SELECT 1"],
+      "readyTimeout": 120
+    }
+  ]
+}
