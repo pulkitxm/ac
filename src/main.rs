@@ -25,6 +25,8 @@ use crate::manifest::Project;
 use crate::state::Snapshot;
 
 fn main() -> ExitCode {
+    clap_complete::CompleteEnv::with_factory(completions::completion_command).complete();
+
     let argv: Vec<String> = std::env::args().collect();
     let rewritten = match rewrite_argv(&argv) {
         Ok(v) => v,
@@ -139,10 +141,7 @@ fn run(cli: Cli) -> Result<()> {
                 CompletionShell::Elvish => clap_complete::Shell::Elvish,
                 CompletionShell::PowerShell => clap_complete::Shell::PowerShell,
             };
-            let mut generated = Vec::new();
-            clap_complete::generate(sh, &mut cmd, "ac", &mut generated);
-            let generated = String::from_utf8_lossy(&generated).into_owned();
-            print!("{}", completions::with_dynamic_projects(shell, &generated));
+            clap_complete::generate(sh, &mut cmd, "ac", &mut std::io::stdout());
             Ok(())
         }
         TopCommand::Ls => cmd_ls(&ctx),
@@ -317,6 +316,42 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                 }
             }
             project::start(ctx, proj, services, *recreate)
+        }
+
+        Action::Services => {
+            let names = proj.manifest.service_names();
+            if ctx.json {
+                ctx.emit_json(&serde_json::json!(names))
+            } else {
+                for n in &names {
+                    println!("{n}");
+                }
+                Ok(())
+            }
+        }
+
+        Action::Builds => {
+            let names = proj.manifest.build_names();
+            if ctx.json {
+                ctx.emit_json(&serde_json::json!(names))
+            } else {
+                for n in &names {
+                    println!("{n}");
+                }
+                Ok(())
+            }
+        }
+
+        Action::Profiles => {
+            let names = proj.manifest.profile_names();
+            if ctx.json {
+                ctx.emit_json(&serde_json::json!(names))
+            } else {
+                for n in &names {
+                    println!("{n}");
+                }
+                Ok(())
+            }
         }
 
         Action::Ls => {

@@ -384,6 +384,35 @@ pub enum Action {
 
     /// Print the project manifest as written.
     Config,
+
+    /// List the service names this project declares.
+    ///
+    /// Reads the manifest only, so it works with the daemon stopped. Shell
+    /// completion uses it, and it is the reliable way for a script or agent to
+    /// discover what can be passed to start, stop, logs, exec and friends.
+    ///
+    /// Examples:
+    ///   ac shop services
+    ///   ac shop services --json
+    Services,
+
+    /// List the build names this project declares.
+    ///
+    /// Reads the manifest only, so it works with the daemon stopped. These are
+    /// the names accepted by `ac <project> build`.
+    ///
+    /// Examples:
+    ///   ac shop builds
+    Builds,
+
+    /// List the build profile names this project declares.
+    ///
+    /// Reads the manifest only, so it works with the daemon stopped. These are
+    /// the values accepted by `ac <project> build --profile`.
+    ///
+    /// Examples:
+    ///   ac shop profiles
+    Profiles,
 }
 
 #[derive(Args, Debug)]
