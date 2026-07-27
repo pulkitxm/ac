@@ -199,7 +199,17 @@ main() {
     pull)     project_pull "$proj" "$@" ;;
     images)   project_images "$proj" ;;
     config)   proj_json "$proj" ;;
-    login)    daemon_ensure; project_login "$proj" "${AC_PROFILE:-local}" ;;
+    login)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -P|--profile) AC_PROFILE="$2"; shift 2 ;;
+          --profile=*)  AC_PROFILE="${1#*=}"; shift ;;
+          *) die "unknown login flag: $1" ;;
+        esac
+      done
+      daemon_ensure
+      project_login "$proj" "${AC_PROFILE:-local}"
+      ;;
 
     build)
       # CLI flags take precedence over profile and manifest values.
