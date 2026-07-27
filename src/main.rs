@@ -437,8 +437,21 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
         }
 
         Action::Stats { services } => {
+            let names = proj.target_container_names(services)?;
+            if ctx.json {
+                let mut argv = vec![
+                    "stats".to_string(),
+                    "--no-stream".into(),
+                    "--format".into(),
+                    "json".into(),
+                ];
+                argv.extend(names);
+                let text = ctx.container(&argv).stdout()?;
+                let v: serde_json::Value = serde_json::from_str(&text)?;
+                return ctx.emit_json(&v);
+            }
             let mut argv = vec!["stats".to_string()];
-            argv.extend(proj.target_container_names(services)?);
+            argv.extend(names);
             let status = ctx.container(&argv).status()?;
             exit_like(status)
         }
@@ -446,6 +459,11 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
         Action::Inspect { services } => {
             let mut argv = vec!["inspect".to_string()];
             argv.extend(proj.target_container_names(services)?);
+            if ctx.json {
+                let text = ctx.container(&argv).stdout()?;
+                let v: serde_json::Value = serde_json::from_str(&text)?;
+                return ctx.emit_json(&v);
+            }
             let status = ctx.container(&argv).status()?;
             exit_like(status)
         }
