@@ -4,6 +4,14 @@ use crate::cli::{ImageAction, NetworkAction, RegistryAction, SystemAction, Volum
 use crate::ctx::Ctx;
 use crate::{daemon, manifest, supervisor};
 
+fn exit_ok(status: std::process::ExitStatus) -> Result<()> {
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("command exited {status}"))
+    }
+}
+
 fn passthrough_json(ctx: &Ctx, args: &[&str]) -> Result<()> {
     daemon::require(ctx)?;
     if ctx.json {
@@ -13,8 +21,7 @@ fn passthrough_json(ctx: &Ctx, args: &[&str]) -> Result<()> {
         let v: serde_json::Value = serde_json::from_str(&text)?;
         ctx.emit_json(&v)
     } else {
-        ctx.container(args.to_vec()).status()?;
-        Ok(())
+        exit_ok(ctx.container(args.to_vec()).status()?)
     }
 }
 
@@ -25,8 +32,7 @@ fn passthrough_raw_json(ctx: &Ctx, args: Vec<String>) -> Result<()> {
         let v: serde_json::Value = serde_json::from_str(&text)?;
         ctx.emit_json(&v)
     } else {
-        ctx.container(args).status()?;
-        Ok(())
+        exit_ok(ctx.container(args).status()?)
     }
 }
 
@@ -34,24 +40,11 @@ fn passthrough(ctx: &Ctx, args: Vec<String>) -> Result<()> {
     daemon::ensure(ctx)?;
     let status = ctx.container(args).status()?;
     supervisor::settle(ctx)?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("command exited {status}"))
-    }
+    exit_ok(status)
 }
 
-pub fn ps(ctx: &Ctx, all: bool) -> Result<()> {
+pub fn ps(ctx: &Ctx, all: bool, ids: bool) -> Result<()> {
     daemon::require(ctx)?;
-    if !ctx.json {
-        let mut args = vec!["ls".to_string()];
-        if all {
-            args.push("-a".into());
-        }
-        ctx.container(args).status()?;
-        return Ok(());
-    }
-
     let text = ctx.container(["ls", "-a", "--format", "json"]).stdout()?;
     let raw: Vec<serde_json::Value> = serde_json::from_str(&text)?;
     let projects = manifest::load_all(&ctx.config_dir, &ctx.ac_home);
@@ -72,7 +65,16 @@ pub fn ps(ctx: &Ctx, all: bool) -> Result<()> {
         (None, None)
     };
 
-    let items: Vec<serde_json::Value> = raw
+    struct Row {
+        id: String,
+        project: Option<String>,
+        service: Option<String>,
+        state: String,
+        ip: Option<String>,
+        image: Option<String>,
+    }
+
+    let rows: Vec<Row> = raw
         .iter()
         .filter_map(|c| {
             let id = c.get("configuration")?.get("id")?.as_str()?.to_string();
@@ -104,22 +106,85 @@ pub fn ps(ctx: &Ctx, all: bool) -> Result<()> {
                 .and_then(|l| l.get("ac.project"))
                 .and_then(|x| x.as_str());
             let (project, service) = attribute(&id, label);
-            Some(serde_json::json!({
-                "container": id,
-                "project": project,
-                "service": service,
-                "state": state,
-                "ip": ip,
-                "image": image,
-            }))
+            Some(Row {
+                id,
+                project,
+                service,
+                state,
+                ip,
+                image,
+            })
         })
         .collect();
-    ctx.emit_json(&serde_json::Value::Array(items))
+
+    if ids {
+        if ctx.json {
+            let names: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+            return ctx.emit_json(&serde_json::json!(names));
+        }
+        for r in &rows {
+            println!("{}", r.id);
+        }
+        return Ok(());
+    }
+
+    if ctx.json {
+        let items: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "container": r.id,
+                    "project": r.project,
+                    "service": r.service,
+                    "state": r.state,
+                    "ip": r.ip,
+                    "image": r.image,
+                })
+            })
+            .collect();
+        return ctx.emit_json(&serde_json::Value::Array(items));
+    }
+
+    ctx.log(&crate::style::bold(&format!(
+        "{:<22} {:<10} {:<12} {:<10} {:<18} {}",
+        "CONTAINER", "PROJECT", "SERVICE", "STATE", "IP", "IMAGE"
+    )));
+    for r in &rows {
+        ctx.log(&format!(
+            "{:<22} {:<10} {:<12} {:<10} {:<18} {}",
+            r.id,
+            r.project.as_deref().unwrap_or("-"),
+            r.service.as_deref().unwrap_or("-"),
+            r.state,
+            r.ip.as_deref().unwrap_or("-"),
+            r.image.as_deref().unwrap_or("-"),
+        ));
+    }
+    Ok(())
 }
 
 pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
-    match action.unwrap_or(&ImageAction::Ls) {
-        ImageAction::Ls => passthrough_json(ctx, &["image", "ls"]),
+    let default = ImageAction::Ls {
+        verbose: false,
+        ids: false,
+    };
+    match action.unwrap_or(&default) {
+        ImageAction::Ls { verbose: _, ids } => {
+            if *ids {
+                daemon::require(ctx)?;
+                if ctx.json {
+                    let text = ctx.container(["image", "ls", "-q"]).stdout()?;
+                    let names: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+                    return ctx.emit_json(&serde_json::json!(names));
+                }
+                return exit_ok(ctx.container(["image", "ls", "-q"]).status()?);
+            }
+            if ctx.json {
+                return passthrough_json(ctx, &["image", "ls"]);
+            }
+            daemon::require(ctx)?;
+            exit_ok(ctx.container(["image", "ls", "--verbose"]).status()?)
+        }
         ImageAction::Pull {
             reference,
             platform,
@@ -142,7 +207,10 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
             args.push(reference.clone());
             passthrough(ctx, args)
         }
-        ImageAction::Rm { references } => {
+        ImageAction::Rm {
+            force: _,
+            references,
+        } => {
             let mut args = vec!["image".to_string(), "rm".into()];
             args.extend(references.iter().cloned());
             passthrough(ctx, args)
@@ -274,12 +342,16 @@ pub fn system(ctx: &Ctx, action: Option<&SystemAction>) -> Result<()> {
             supervisor::stop(ctx);
             daemon::release(ctx)
         }
-        SystemAction::Prune => {
+        SystemAction::Prune { all } => {
             daemon::ensure(ctx)?;
             ctx.info("removing stopped containers");
             ctx.container(["prune"]).status()?;
             ctx.info("removing unused images");
-            ctx.container(["image", "prune"]).status()?;
+            let mut args = vec!["image".to_string(), "prune".into()];
+            if *all {
+                args.push("--all".into());
+            }
+            ctx.container(args).status()?;
             supervisor::settle(ctx)
         }
         SystemAction::Logs { follow, last } => {
@@ -325,6 +397,6 @@ pub fn registry(ctx: &Ctx, action: Option<&RegistryAction>) -> Result<()> {
             ctx,
             vec!["registry".to_string(), "logout".into(), server.clone()],
         ),
-        RegistryAction::Ls => passthrough(ctx, vec!["registry".to_string(), "ls".into()]),
+        RegistryAction::Ls => passthrough_json(ctx, &["registry", "ls"]),
     }
 }

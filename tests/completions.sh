@@ -132,6 +132,15 @@ offers "ac system <tab>"   "stop"     2 ac system ""
 offers "ac registry <tab>" "login"    2 ac registry ""
 offers "ac guide <tab>"    "claude"   2 ac guide ""
 
+echo "escape hatch project names"
+offers "ac project <tab>"     "shop"   2 ac project ""
+offers "ac project no<tab>"   "shop"   2 ac project no
+
+echo "new flags"
+offers "stop flags"  "--time"      3 ac shop stop ""
+offers "down flags"  "--volumes"   3 ac shop down ""
+offers "stats flags" "--no-stream" 3 ac shop stats ""
+
 echo "nested subcommands"
 offers "ac daemon <tab>"      "status"   2 ac daemon ""
 offers "ac daemon <tab>"      "stop"     2 ac daemon ""

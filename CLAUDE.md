@@ -266,17 +266,17 @@ hatch `ac -p <project> <action>`.
 | `wait [--timeout N] [svc...]` | Polls `readyCmd` (or the running state when there is none) and exits non-zero on timeout, so scripts can gate on readiness. |
 | `push [-P profile] [name...]` | Pushes the tags `build` would produce, without building. Logs in first, filtered to the registries involved. postPush hooks do not run. |
 | `export <svc> [-o file]` | `container export`. Apple container refuses on a running container, so `ac` checks and says to stop it first. Default output `<project>-<svc>.tar`. |
-| `stop [svc...]` | `container stop`. Containers are **kept**, so `start` brings them back in place. Then the cross-project daemon refcount check. |
-| `down [svc...]` | `container stop` then `container rm`. Named volumes and data survive. Then the refcount check. |
+| `stop [-t SECS] [svc...]` | `container stop [--time N]`. Containers are **kept**, so `start` brings them back in place. The result is verified against observed state, not the exit code. Then the cross-project daemon refcount check. |
+| `down [-v] [-t SECS] [svc...]` | `container stop` then `container rm`. Named volumes and data survive unless `-v/--volumes` is given, which deletes them and their data. Then the refcount check. |
 | `restart [svc...]` | `stop` then `start`, without releasing the daemon in between. |
 | `ls`, `ps`, `status` | One `container ls -a --format json`, joined against the manifest. Never created shows as `absent`. |
 | `logs [-f] [-n N] [--boot] [svc]` | `container logs`. With no service it fans out across every service, prefixed and coloured per service; Ctrl-C tears down the group. |
-| `exec <svc> <cmd...>` | `container exec -i [-t] <project>-<svc> <cmd...>`. |
+| `exec <svc> <cmd...>` | `container exec -i [-t] <project>-<svc> <cmd...>`. Docker's `-it` is accepted and ignored; interactivity is detected. |
 | `sh`, `shell [svc]` | `container exec` running bash when present, else sh. Defaults to the first service. |
-| `stats [svc...]` | `container stats <containers...>` |
+| `stats [--no-stream] [svc...]` | `container stats`. `--json` implies `--no-stream` and is killed after 20s if the runtime wedges. |
 | `inspect [svc...]` | `container inspect <containers...>` |
 | `kill [-s SIG] [svc...]` | `container kill --signal <SIG> <containers...>`, default KILL. |
-| `rm [svc...]` | `container rm --force`, then the refcount check. Volumes survive. |
+| `rm [svc...]` | `container rm --force` on services that exist, absent ones are skipped like `down` does, failures exit non-zero. Then the refcount check. Volumes survive. |
 | `cp <src> <dst>` | `container cp`, rewriting `svc:/path` to `<project>-<svc>:/path` on either side. |
 | `pull [svc...]` | `container image pull` per service, after any needed login. |
 | `images` | Images the services use, from the manifest. |
@@ -293,19 +293,19 @@ hatch `ac -p <project> <action>`.
 | --- | --- |
 | `ac ls`, `ac projects` | List discoverable projects. |
 | `ac status` | Daemon, supervisor, and every project. |
-| `ac ps [-a]` | `container ls` across everything. `--json` joins against the manifests: `[{container, project, service, state, ip, image}]`. |
-| `ac image <ls\|pull\|push\|rm\|tag\|inspect\|prune\|save\|load>` | The local image store, docker image style. `ac images` still works as an alias for `ac image ls`. |
+| `ac ps [-a] [-q]` | One `container ls -a` joined against the manifests. The human table carries PROJECT and SERVICE columns; `-q` prints names only; `--json` emits `[{container, project, service, state, ip, image}]`. |
+| `ac image <ls\|pull\|push\|rm\|tag\|inspect\|prune\|save\|load>` | The local image store, docker image style. `ls` shows sizes (`container image ls --verbose`) and takes `-q` for names only; `rm` also answers to `delete`/`remove`, `ls` to `list`; `ac images` and `ac rmi` aliases work. |
 | `ac volume <ls\|create\|rm\|inspect\|prune>` | Volumes across the whole daemon. Per-project volumes stay under `ac <project> volumes`. |
 | `ac network <ls\|create\|rm\|inspect\|prune>` | Networks. Non-default networks need macOS 26. |
-| `ac system <info\|df\|start\|stop\|prune\|logs>` | Daemon lifecycle and disk usage. `start`/`stop` follow the ownership contract; `stop` refuses to touch an external daemon. |
-| `ac registry <login\|logout\|ls>` | Registry logins outside any project. |
+| `ac system <info\|df\|start\|stop\|prune\|logs>` | Daemon lifecycle and disk usage. `start`/`stop` follow the ownership contract; `stop` refuses to touch an external daemon. `prune --all` also removes every unused image. |
+| `ac registry <login\|logout\|ls>` | Registry logins outside any project. `ls` is a plain read with `--json`. |
 | `ac daemon status` | Daemon state and who owns it. |
 | `ac daemon stop` | Stop the daemon, **only** if ac started it. |
 | `ac df`, `ac prune` | Route through the `system` group; same behaviour as before. |
 | `ac config` | Resolved `~/.config/ac/config.json`. |
 | `ac schema` | The manifest JSON Schema. |
 | `ac guide [claude]` | The embedded manual (`docs/guide.md`). `claude` prints `docs/claude-snippet.md`, a drop-in block for another repo's CLAUDE.md. |
-| `ac completions <shell>` | zsh, bash, fish, elvish or powershell. |
+| `ac completions <shell>` | zsh, bash, fish, elvish or powershell (power-shell also accepted). |
 | `ac version`, `ac help` | |
 
 Global reads (`ps`, `image ls`, `df`, ...) **require** a running daemon and
@@ -318,7 +318,14 @@ afterwards, so a daemon started for a one-off command is released again.
 
 - `--json` on every read command, with stable field names. It **implies
   `--quiet`**, and human log lines move to stderr, so stdout stays a single
-  parseable document.
+  parseable document. On failure stdout may be empty; the exit code is the
+  contract. `--format json` anywhere is rewritten to `--json` for docker
+  muscle memory; other `--format` values error with that hint.
+- The global quiet flag is `--quiet`/`AC_QUIET=1` only. The short `-q` belongs
+  to the docker-style listings (`ac ps -q`, `ac image ls -q`), where it means
+  names only.
+- `wait` enforces its timeout as a wall clock: each readiness probe runs under
+  its own kill deadline, so a wedged `container exec` cannot hang the loop.
 - Every underlying `container` command is **echoed to stderr**, dimmed and
   prefixed with `$ `, before it runs, so any step can be copied and re-run by
   hand. Suppress with `AC_QUIET=1` or `--quiet`.
@@ -397,6 +404,15 @@ Hard won, do not rediscover:
 - **`container exec -t` fails with ENODEV when there is no TTY.** Only pass `-t`
   when stdin **and** stdout are terminals. This is what breaks execs in scripts
   and CI.
+- **`container cp` is unreliable in 1.1.0.** Copies INTO a container can
+  silently no-op while exiting 0, and copies out of a container can hang
+  forever; killing the hung `cp` can wedge the container so `stop` and `kill`
+  stall too. Prefer `exec` with shell redirection, or `export`. `ac` passes
+  `cp` through and cannot mask this.
+- **A single container's exec channel can wedge under load**, taking every
+  `exec`-based feature with it (readiness probes, `top`, `stats`). `ac` bounds
+  its own probes with kill deadlines; a bare `ac <p> exec` into a wedged
+  container will still block until you Ctrl-C.
 - **Named volumes are real ext4 devices**, so a fresh one already contains
   `lost+found`. Postgres refuses to initialise into a non-empty directory, hence
   `PGDATA` pointing at a subdirectory in the example above.
@@ -532,6 +548,11 @@ volume survival) cannot be faked. It:
   all really suppress it.
 - **The manifest is typed and rejects unknown fields.** bash read it with `jq`,
   so a misspelled key was silently ignored.
+- **`stop` trusts observed state, not exit codes.** After stopping, the
+  container list is re-read; a container that still runs makes the command
+  fail loudly instead of reporting success.
+- **`start --recreate` recreates running containers too**, stopping them
+  first, instead of silently short-circuiting on "already running".
 - **The supervisor debounce is implemented.** bash left it as a `TODO(human)`:
   it counted idle polls but never acted on them, so an ac-owned daemon was only
   ever reaped by the synchronous check inside `stop`/`down`, never by the

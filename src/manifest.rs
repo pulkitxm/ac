@@ -312,12 +312,45 @@ pub fn load_project_file(file: &Path, name: &str) -> Result<Project> {
             e
         )
     })?;
+    validate(&manifest, file, name)?;
     Ok(Project {
         name: name.to_string(),
         file: file.to_path_buf(),
         manifest,
         raw,
     })
+}
+
+fn validate(manifest: &Manifest, file: &Path, name: &str) -> Result<()> {
+    if manifest.name != name {
+        return Err(anyhow!(
+            "manifest {} declares name '{}' but the file is {name}.json; \
+containers are named after the file, so rename one of them to match",
+            file.display(),
+            manifest.name
+        ));
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for s in &manifest.services {
+        if !seen.insert(s.name.as_str()) {
+            return Err(anyhow!(
+                "manifest {} declares the service '{}' more than once",
+                file.display(),
+                s.name
+            ));
+        }
+    }
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    for b in &manifest.builds {
+        if !seen.insert(b.name.as_str()) {
+            return Err(anyhow!(
+                "manifest {} declares the build '{}' more than once",
+                file.display(),
+                b.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn load_all(config_dir: &Path, ac_home: &Path) -> Vec<Project> {
@@ -332,5 +365,50 @@ pub fn json_scalar(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn load(raw: &str, stem: &str) -> Result<Project> {
+        let dir = std::env::temp_dir().join(format!("ac-manifest-test-{stem}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(format!("{stem}.json"));
+        std::fs::write(&file, raw).unwrap();
+        let out = load_project_file(&file, stem);
+        std::fs::remove_dir_all(&dir).ok();
+        out
+    }
+
+    #[test]
+    fn name_must_match_the_file_name() {
+        let err = load(r#"{"name":"other","services":[]}"#, "m1").err().unwrap();
+        assert!(err.to_string().contains("'other'"), "{err}");
+        assert!(err.to_string().contains("m1.json"), "{err}");
+        assert!(load(r#"{"name":"m2","services":[]}"#, "m2").is_ok());
+    }
+
+    #[test]
+    fn duplicate_service_and_build_names_are_rejected() {
+        let err = load(
+            r#"{"name":"m3","services":[
+                {"name":"s","image":"a"},{"name":"s","image":"b"}]}"#,
+            "m3",
+        )
+        .err()
+        .unwrap();
+        assert!(err.to_string().contains("service 's'"), "{err}");
+
+        let err = load(
+            r#"{"name":"m4","builds":[
+                {"name":"b","dockerfile":"D","image":"i","tags":["t"]},
+                {"name":"b","dockerfile":"D2","image":"i2","tags":["t"]}]}"#,
+            "m4",
+        )
+        .err()
+        .unwrap();
+        assert!(err.to_string().contains("build 'b'"), "{err}");
     }
 }

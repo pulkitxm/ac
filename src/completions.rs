@@ -22,7 +22,11 @@ pub fn completion_command() -> Command {
         return base;
     }
 
-    let mut cmd = base;
+    let mut cmd = base.mut_subcommand("project", |sub| {
+        sub.mut_arg("name", |arg| {
+            arg.add(ArgValueCandidates::new(|| candidates(project_names())))
+        })
+    });
     for name in names {
         let leaked: &'static str = Box::leak(name.clone().into_boxed_str());
         let mut sub = Command::new(leaked).about(format!("Actions for {name}"));

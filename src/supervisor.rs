@@ -94,7 +94,7 @@ pub fn settle(ctx: &Ctx) -> Result<()> {
     let remaining = state::ac_running_containers(ctx, false);
     if !remaining.is_empty() {
         ctx.dim(&format!(
-            "{} ac container(s) still running - leaving daemon up",
+            "{} ac container(s) still running across all projects - leaving daemon up",
             remaining.len()
         ));
         return Ok(());

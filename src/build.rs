@@ -550,6 +550,16 @@ fn plan_build(
     if tags.is_empty() {
         return Err(anyhow!("build '{}' declares no tags", b.name));
     }
+    for (raw, rendered) in b.tags.iter().filter(|t| !t.is_empty()).zip(tags.iter()) {
+        let suffix = rendered.rsplit(':').next().unwrap_or("");
+        if suffix.is_empty() || suffix.starts_with('-') {
+            return Err(anyhow!(
+                "build '{}': tag template '{raw}' rendered as '{rendered}'; \
+git placeholders are empty because the build root is not a git repository",
+                b.name
+            ));
+        }
+    }
 
     let mut args: Vec<String> = vec![
         "build".into(),

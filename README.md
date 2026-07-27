@@ -61,8 +61,8 @@ one container. Services can be named either bare (`redis`) or by container name
 
 ```
 ac <project> start | up [svc...]   start services (up is an alias)
-ac <project> stop [svc...]         stop services, containers kept in place
-ac <project> down [svc...]         stop and remove; named volumes survive
+ac <project> stop [-t SECS] [svc...]  stop services, containers kept in place
+ac <project> down [-v] [svc...]    stop and remove; -v also deletes volumes
 ac <project> restart [svc...]      stop then start
 ac <project> ls | ps | status      per-service state, IP, published ports
 ac <project> logs [-f] [-n N] [svc]  logs; no service means all, interleaved
@@ -72,7 +72,7 @@ ac <project> exec <svc> <cmd...>   run a command in a service
 ac <project> sh [svc]              interactive shell (bash if present, else sh)
 ac <project> top [svc...]          processes inside each running service
 ac <project> wait [--timeout N]    block until ready; exit code says so
-ac <project> stats [svc...]        live resource usage
+ac <project> stats [--no-stream]   live resource usage
 ac <project> inspect [svc...]      full container JSON
 ac <project> kill [-s SIG] [svc..] send a signal, default KILL
 ac <project> rm [svc...]           force remove containers, keeping volumes
@@ -88,8 +88,9 @@ ac <project> config                the project manifest
 
 ac ls                              list projects
 ac status                          daemon + supervisor + every project
-ac ps [-a]                         containers across every project
-ac image ls|pull|push|rm|tag|inspect|prune|save|load
+ac ps [-a] [-q]                    containers across every project, with
+                                   project and service attribution
+ac image ls|pull|push|rm|tag|inspect|prune|save|load   (ls shows sizes; -q names only; rmi works)
 ac volume ls|create|rm|inspect|prune
 ac network ls|create|rm|inspect|prune
 ac system info|df|start|stop|prune|logs
