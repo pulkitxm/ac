@@ -62,9 +62,9 @@ fn with_candidates_at(action: Command, project: &str, parent: &str) -> Command {
 fn decorate(arg: Arg, project: &str, action: &str) -> Arg {
     let p = project.to_string();
     match arg.get_id().as_str() {
-        "services" | "service" => {
-            arg.add(ArgValueCandidates::new(move || candidates(service_names(&p))))
-        }
+        "services" | "service" => arg.add(ArgValueCandidates::new(move || {
+            candidates(service_names(&p))
+        })),
         "profile" => arg.add(ArgValueCandidates::new(move || {
             candidates(profile_names(&p))
         })),
@@ -72,9 +72,9 @@ fn decorate(arg: Arg, project: &str, action: &str) -> Arg {
             "build" | "push" => {
                 arg.add(ArgValueCandidates::new(move || candidates(build_names(&p))))
             }
-            "volumes rm" | "volumes inspect" => {
-                arg.add(ArgValueCandidates::new(move || candidates(volume_names(&p))))
-            }
+            "volumes rm" | "volumes inspect" => arg.add(ArgValueCandidates::new(move || {
+                candidates(volume_names(&p))
+            })),
             _ => arg.add(ArgValueCandidates::new(move || {
                 let mut v = service_names(&p);
                 v.extend(build_names(&p));
