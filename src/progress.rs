@@ -28,7 +28,10 @@ pub fn parse_line(line: &str) -> Event<'_> {
         return Event::Log { id };
     }
     if let Some(t) = tail.strip_prefix("DONE") {
-        let secs = t.trim().strip_suffix('s').and_then(|n| n.parse::<f32>().ok());
+        let secs = t
+            .trim()
+            .strip_suffix('s')
+            .and_then(|n| n.parse::<f32>().ok());
         return Event::Done { id, secs };
     }
     if tail == "CACHED" {
@@ -255,7 +258,13 @@ mod tests {
                 name: "[linux/arm64 1/3] RUN echo hello > /hello.txt"
             }
         );
-        assert_eq!(parse_line("#5 DONE 2.1s"), Event::Done { id: 5, secs: Some(2.1) });
+        assert_eq!(
+            parse_line("#5 DONE 2.1s"),
+            Event::Done {
+                id: 5,
+                secs: Some(2.1)
+            }
+        );
         assert_eq!(parse_line("#4 CACHED"), Event::Cached { id: 4 });
         assert_eq!(parse_line("#4 CANCELED"), Event::Canceled { id: 4 });
         assert_eq!(
@@ -300,13 +309,18 @@ mod tests {
     #[test]
     fn labels_drop_the_bracketed_prefix() {
         assert_eq!(step_label("[deps 1/4] RUN npm ci"), "RUN npm ci");
-        assert_eq!(step_label("exporting to oci image format"), "exporting to oci image format");
+        assert_eq!(
+            step_label("exporting to oci image format"),
+            "exporting to oci image format"
+        );
     }
 
     #[test]
     fn tracker_counts_steps_and_reports_finishes() {
         let mut t = Tracker::new();
-        assert!(t.observe("#2 [internal] load build definition from Dockerfile").is_none());
+        assert!(t
+            .observe("#2 [internal] load build definition from Dockerfile")
+            .is_none());
         assert!(t.observe("#2 DONE 0.0s").is_none());
         assert!(t.observe("#5 [linux/arm64 1/3] RUN echo hello").is_none());
         let fin = t.observe("#5 DONE 0.1s").unwrap();

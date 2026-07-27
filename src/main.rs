@@ -21,7 +21,9 @@ use anyhow::{anyhow, Result};
 use clap::{CommandFactory, Parser};
 
 use crate::build::{vars_for, BuildOverrides};
-use crate::cli::{Action, Cli, CompletionShell, DaemonAction, ImagesAction, TopCommand, VolumesAction, RESERVED};
+use crate::cli::{
+    Action, Cli, CompletionShell, DaemonAction, ImagesAction, TopCommand, VolumesAction, RESERVED,
+};
 use crate::ctx::Ctx;
 use crate::manifest::Project;
 use crate::state::Snapshot;
@@ -301,7 +303,9 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
 
         Action::Wait { timeout, services } => project::wait(ctx, proj, services, *timeout),
 
-        Action::Push { profile, names } => build::project_push(ctx, proj, names, profile.as_deref()),
+        Action::Push { profile, names } => {
+            build::project_push(ctx, proj, names, profile.as_deref())
+        }
 
         Action::Export { service, output } => {
             project::export(ctx, proj, service, output.as_deref())
@@ -680,8 +684,7 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                 VolumesAction::Inspect { names } => {
                     daemon::ensure(ctx)?;
                     let targets = resolve(names)?;
-                    let mut args: Vec<String> =
-                        vec!["volume".into(), "inspect".into()];
+                    let mut args: Vec<String> = vec!["volume".into(), "inspect".into()];
                     args.extend(targets.iter().map(|(_, full)| full.clone()));
                     ctx.container(args).status()?;
                     Ok(())

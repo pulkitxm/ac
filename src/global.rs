@@ -200,9 +200,10 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
 pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
     match action.unwrap_or(&VolumeAction::Ls) {
         VolumeAction::Ls => passthrough_json(ctx, &["volume", "ls"]),
-        VolumeAction::Create { name } => {
-            passthrough(ctx, vec!["volume".to_string(), "create".into(), name.clone()])
-        }
+        VolumeAction::Create { name } => passthrough(
+            ctx,
+            vec!["volume".to_string(), "create".into(), name.clone()],
+        ),
         VolumeAction::Rm { names } => {
             let mut args = vec!["volume".to_string(), "rm".into()];
             args.extend(names.iter().cloned());

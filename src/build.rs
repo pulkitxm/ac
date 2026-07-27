@@ -486,7 +486,13 @@ fn spawn_ticker(reporters: &[&Reporter<'_>]) -> (Arc<AtomicBool>, thread::JoinHa
     (stop, handle)
 }
 
-fn run_hooks(rep: &Reporter, root: &Path, key: &str, hooks: &[Vec<String>], v: &Vars) -> Result<()> {
+fn run_hooks(
+    rep: &Reporter,
+    root: &Path,
+    key: &str,
+    hooks: &[Vec<String>],
+    v: &Vars,
+) -> Result<()> {
     for hook in hooks {
         if hook.is_empty() {
             continue;
@@ -696,7 +702,12 @@ fn build_one(
     Ok((plan.tags, plan.push))
 }
 
-pub fn project_build(ctx: &Ctx, proj: &Project, names: &[String], ov: &BuildOverrides) -> Result<()> {
+pub fn project_build(
+    ctx: &Ctx,
+    proj: &Project,
+    names: &[String],
+    ov: &BuildOverrides,
+) -> Result<()> {
     let profile = ov.profile_name();
     if proj.manifest.profiles.get(&profile).is_none() {
         return Err(anyhow!(
@@ -764,7 +775,10 @@ pub fn project_build(ctx: &Ctx, proj: &Project, names: &[String], ov: &BuildOver
                     .iter()
                     .map(|x| x.as_str().unwrap_or("").to_string())
                     .collect();
-                println!("  {}", style::dim(&format!("$ container {}", joined.join(" "))));
+                println!(
+                    "  {}",
+                    style::dim(&format!("$ container {}", joined.join(" ")))
+                );
             }
             println!();
         }
@@ -986,10 +1000,7 @@ fn run_basic(
                     })
                 })
                 .collect();
-            handles
-                .into_iter()
-                .filter_map(|h| h.join().ok())
-                .collect()
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
         })
     } else {
         entries
@@ -1002,7 +1013,12 @@ fn run_basic(
     }
 }
 
-pub fn project_push(ctx: &Ctx, proj: &Project, names: &[String], profile_arg: Option<&str>) -> Result<()> {
+pub fn project_push(
+    ctx: &Ctx,
+    proj: &Project,
+    names: &[String],
+    profile_arg: Option<&str>,
+) -> Result<()> {
     let ov = BuildOverrides {
         profile: profile_arg.map(String::from),
         ..Default::default()
@@ -1058,7 +1074,11 @@ pub fn project_push(ctx: &Ctx, proj: &Project, names: &[String], profile_arg: Op
         let mut pushed: Vec<String> = Vec::new();
         for t in &tags {
             ctx.info(&format!("pushing {t}"));
-            if ctx.container(["image", "push", t.as_str()]).status()?.success() {
+            if ctx
+                .container(["image", "push", t.as_str()])
+                .status()?
+                .success()
+            {
                 ctx.ok(t);
                 pushed.push(t.clone());
             } else {
@@ -1118,7 +1138,10 @@ fn report(ctx: &Ctx, outcomes: &[Outcome]) -> Result<()> {
         .map(|o| o.name.as_str())
         .collect();
     if !failures.is_empty() {
-        return Err(anyhow!("one or more builds failed: {}", failures.join(", ")));
+        return Err(anyhow!(
+            "one or more builds failed: {}",
+            failures.join(", ")
+        ));
     }
     ctx.ok("all builds finished");
     Ok(())
