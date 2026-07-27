@@ -69,7 +69,9 @@ fn decorate(arg: Arg, project: &str, action: &str) -> Arg {
             candidates(profile_names(&p))
         })),
         "names" => match action {
-            "build" => arg.add(ArgValueCandidates::new(move || candidates(build_names(&p)))),
+            "build" | "push" => {
+                arg.add(ArgValueCandidates::new(move || candidates(build_names(&p))))
+            }
             "volumes rm" | "volumes inspect" => {
                 arg.add(ArgValueCandidates::new(move || candidates(volume_names(&p))))
             }

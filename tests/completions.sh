@@ -49,9 +49,11 @@ omits  "ac no<tab>"      "status"      1 ac no
 
 echo "project actions, bare form"
 for action in start stop down restart ls logs exec sh stats inspect kill rm \
-              cp pull images port ip env build login config services builds profiles; do
+              cp pull images port ip env build login config services builds profiles \
+              run create top wait push export; do
     offers "ac shop <tab>" "$action" 2 ac shop ""
 done
+offers "up parses even though completion offers the canonical start" "--recreate" 3 ac shop up ""
 
 echo "project actions, explicit forms"
 offers "ac project shop <tab>" "start" 3 ac project shop ""
@@ -105,6 +107,30 @@ offers "ac shop volumes inspect <tab>" "redis-data"   4 ac shop volumes inspect 
 echo "namespaces do not leak into each other"
 omits  "images rm has no volume names"  "postgres-data" 4 ac shop images rm ""
 omits  "build has no service names"     "postgres"      3 ac shop build ""
+
+echo "compose verbs take service and build values"
+offers "ac shop run <tab>"    "postgres" 3 ac shop run ""
+offers "ac shop wait <tab>"   "redis"    3 ac shop wait ""
+offers "ac shop top <tab>"    "postgres" 3 ac shop top ""
+offers "ac shop create <tab>" "redis"    3 ac shop create ""
+offers "ac shop export <tab>" "postgres" 3 ac shop export ""
+offers "ac shop push <tab>"   "web"      3 ac shop push ""
+omits  "ac shop push <tab>"   "postgres" 3 ac shop push ""
+offers "push takes a profile"   "--profile" 3 ac shop push ""
+
+echo "global noun groups"
+offers "ac <tab>"          "ps"       1 ac ""
+offers "ac <tab>"          "image"    1 ac ""
+offers "ac <tab>"          "guide"    1 ac ""
+offers "ac image <tab>"    "pull"     2 ac image ""
+offers "ac image <tab>"    "save"     2 ac image ""
+offers "ac image <tab>"    "tag"      2 ac image ""
+offers "ac volume <tab>"   "prune"    2 ac volume ""
+offers "ac network <tab>"  "create"   2 ac network ""
+offers "ac system <tab>"   "df"       2 ac system ""
+offers "ac system <tab>"   "stop"     2 ac system ""
+offers "ac registry <tab>" "login"    2 ac registry ""
+offers "ac guide <tab>"    "claude"   2 ac guide ""
 
 echo "nested subcommands"
 offers "ac daemon <tab>"      "status"   2 ac daemon ""
