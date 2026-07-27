@@ -73,7 +73,8 @@ More docker habits that just work: `exec -it` and `run -it` parse and are
 ignored, since interactivity and TTY allocation are detected automatically.
 `--format json` anywhere maps to `--json`. `list`, `delete` and `remove`
 work as spellings of `ls` and `rm` in the image, volume and network groups.
-`ac help <command>` works alongside `--help`.
+`ac help <command>` works for the global commands; project verbs use
+`ac <project> <verb> --help` or `ac help project <verb>`.
 
 Discovery commands that read only the manifest, so they work with the
 daemon stopped: `ac <project> services`, `ac <project> builds`,

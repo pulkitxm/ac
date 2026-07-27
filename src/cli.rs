@@ -100,6 +100,12 @@ pub enum TopCommand {
     /// keeps working.
     #[command(visible_alias = "images")]
     Image {
+        /// Accepted for docker muscle memory; sizes are already shown.
+        #[arg(short = 'v', long, hide = true)]
+        verbose: bool,
+        /// Only print image names, docker images -q style.
+        #[arg(short = 'q', hide = true)]
+        ids: bool,
         #[command(subcommand)]
         action: Option<ImageAction>,
     },

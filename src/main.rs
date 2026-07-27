@@ -246,7 +246,20 @@ fn run(cli: Cli) -> Result<()> {
             }
         },
         TopCommand::Ps { all, ids } => global::ps(&ctx, *all, *ids),
-        TopCommand::Image { action } => global::image(&ctx, action.as_ref()),
+        TopCommand::Image {
+            verbose,
+            ids,
+            action,
+        } => match action {
+            Some(a) => global::image(&ctx, Some(a)),
+            None => global::image(
+                &ctx,
+                Some(&cli::ImageAction::Ls {
+                    verbose: *verbose,
+                    ids: *ids,
+                }),
+            ),
+        },
         TopCommand::Volume { action } => global::volume(&ctx, action.as_ref()),
         TopCommand::Network { action } => global::network(&ctx, action.as_ref()),
         TopCommand::System { action } => global::system(&ctx, action.as_ref()),
@@ -581,9 +594,65 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
         Action::Rm { services } => project::remove(ctx, proj, services),
 
         Action::Cp { src, dst } => {
-            let status = ctx
-                .container(["cp", &cp_path(proj, src)?, &cp_path(proj, dst)?])
-                .status()?;
+            let src_r = cp_path(proj, src)?;
+            let dst_r = cp_path(proj, dst)?;
+
+            let container_side = |rewritten: &str| -> Option<(String, String)> {
+                let (head, tail) = rewritten.split_once(':')?;
+                if tail.starts_with('/') && head.starts_with(&format!("{}-", proj.name)) {
+                    Some((head.to_string(), tail.to_string()))
+                } else {
+                    None
+                }
+            };
+
+            if let Some((cname, path)) = container_side(&src_r) {
+                match ctx
+                    .container(["exec", &cname, "sh", "-c", "test -e \"$1\"", "_", &path])
+                    .silent()
+                    .quiet_ok_timeout(10)
+                {
+                    Some(true) => {}
+                    Some(false) => {
+                        return Err(anyhow!("'{path}' does not exist in {cname}"));
+                    }
+                    None => {
+                        return Err(anyhow!(
+                            "{cname} is not answering exec probes; container cp would hang \
+(known Apple container issue), aborting"
+                        ));
+                    }
+                }
+            }
+
+            let status = ctx.container(["cp", &src_r, &dst_r]).status()?;
+            if status.success() {
+                if let Some((cname, path)) = container_side(&dst_r) {
+                    let base = std::path::Path::new(&src_r)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let landed = ctx
+                        .container([
+                            "exec",
+                            &cname,
+                            "sh",
+                            "-c",
+                            "test -e \"$1\" || test -e \"$1/$2\"",
+                            "_",
+                            &path,
+                            &base,
+                        ])
+                        .silent()
+                        .quiet_ok_timeout(10);
+                    if landed == Some(false) {
+                        return Err(anyhow!(
+                            "container cp reported success but nothing appeared at {cname}:{path} \
+(known Apple container issue; use exec with redirection instead)"
+                        ));
+                    }
+                }
+            }
             exit_like(status)
         }
 
