@@ -1,0 +1,29 @@
+[package]
+name = "ac"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Apple Container project runner"
+license = "MIT"
+default-run = "ac"
+
+[[bin]]
+name = "ac"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+ctrlc = "3"
+indicatif = "0.17"
+owo-colors = { version = "4", features = ["supports-colors"] }
+serde = { version = "1", features = ["derive"] }
+# preserve_order keeps manifest maps (env, buildArgs, labels) in the order the
+# author wrote them, so the echoed `container` command matches the manifest.
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+strip = true
