@@ -1,4 +1,5 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, IsTerminal, Write};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -60,23 +61,25 @@ fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
     }
 }
 
-fn wait_ready(ctx: &Ctx, cname: &str, svc: &Service) {
-    if svc.ready_cmd.is_empty() {
-        return;
-    }
+fn poll_ready(ctx: &Ctx, cname: &str, svc: &Service, timeout: u64) -> bool {
     let mut waited = 0u64;
     if !ctx.json {
         print!("  waiting for {cname} ");
         std::io::stdout().flush().ok();
     }
-    while waited < svc.ready_timeout {
-        let mut argv: Vec<String> = vec!["exec".into(), cname.to_string()];
-        argv.extend(svc.ready_cmd.iter().cloned());
-        if ctx.container(&argv).silent().quiet_ok() {
+    while waited < timeout {
+        let ok = if svc.ready_cmd.is_empty() {
+            Snapshot::query_silent(ctx).state(cname) == "running"
+        } else {
+            let mut argv: Vec<String> = vec!["exec".into(), cname.to_string()];
+            argv.extend(svc.ready_cmd.iter().cloned());
+            ctx.container(&argv).silent().quiet_ok()
+        };
+        if ok {
             if !ctx.json {
                 println!(" {}", style::green("ready"));
             }
-            return;
+            return true;
         }
         if !ctx.json {
             print!(".");
@@ -88,18 +91,57 @@ fn wait_ready(ctx: &Ctx, cname: &str, svc: &Service) {
     if !ctx.json {
         println!(" {}", style::yellow("timeout"));
     }
-    ctx.warn(&format!(
-        "{cname} did not become ready within {}s (continuing)",
-        svc.ready_timeout
-    ));
+    false
 }
 
-fn run_args(proj: &Project, svc: &Service, cname: &str) -> Vec<String> {
+fn wait_ready(ctx: &Ctx, cname: &str, svc: &Service) {
+    if svc.ready_cmd.is_empty() {
+        return;
+    }
+    if !poll_ready(ctx, cname, svc, svc.ready_timeout) {
+        ctx.warn(&format!(
+            "{cname} did not become ready within {}s (continuing)",
+            svc.ready_timeout
+        ));
+    }
+}
+
+pub fn wait(ctx: &Ctx, proj: &Project, services: &[String], timeout: Option<u64>) -> Result<()> {
+    let targets = proj.target_services(services)?;
+    daemon::require(ctx)?;
+
+    let mut results: Vec<(String, bool)> = Vec::new();
+    for name in &targets {
+        let Some(svc) = proj.manifest.service(name) else {
+            continue;
+        };
+        let cname = proj.container_name(name);
+        let limit = timeout.unwrap_or(svc.ready_timeout);
+        results.push((name.clone(), poll_ready(ctx, &cname, svc, limit)));
+    }
+
+    if ctx.json {
+        let items: Vec<serde_json::Value> = results
+            .iter()
+            .map(|(name, ready)| serde_json::json!({ "service": name, "ready": ready }))
+            .collect();
+        ctx.emit_json(&serde_json::Value::Array(items))?;
+    }
+
+    let failed: Vec<&str> = results
+        .iter()
+        .filter(|(_, ready)| !ready)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    if failed.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!("not ready: {}", failed.join(", ")))
+    }
+}
+
+fn resource_args(proj: &Project, svc: &Service, cname: &str, ports: bool, volumes: bool) -> Vec<String> {
     let mut args: Vec<String> = vec![
-        "run".into(),
-        "-d".into(),
-        "--progress".into(),
-        "none".into(),
         "--name".into(),
         cname.to_string(),
         "--label".into(),
@@ -117,14 +159,32 @@ fn run_args(proj: &Project, svc: &Service, cname: &str) -> Vec<String> {
         args.push("--env".into());
         args.push(format!("{k}={}", json_scalar(v)));
     }
-    for p in &svc.ports {
-        args.push("--publish".into());
-        args.push(p.clone());
+    if ports {
+        for p in &svc.ports {
+            args.push("--publish".into());
+            args.push(p.clone());
+        }
     }
-    for v in &svc.volumes {
-        args.push("--volume".into());
-        args.push(format!("{}:{}", proj.volume_name(&v.name), v.target));
+    if volumes {
+        for v in &svc.volumes {
+            args.push("--volume".into());
+            args.push(format!("{}:{}", proj.volume_name(&v.name), v.target));
+        }
     }
+    args
+}
+
+fn run_args(proj: &Project, svc: &Service, cname: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec!["run".into(), "-d".into(), "--progress".into(), "none".into()];
+    args.extend(resource_args(proj, svc, cname, true, true));
+    args.push(svc.image.clone());
+    args.extend(svc.args.iter().cloned());
+    args
+}
+
+fn create_args(proj: &Project, svc: &Service, cname: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec!["create".into()];
+    args.extend(resource_args(proj, svc, cname, true, true));
     args.push(svc.image.clone());
     args.extend(svc.args.iter().cloned());
     args
@@ -145,7 +205,7 @@ pub fn start_service(ctx: &Ctx, proj: &Project, name: &str, recreate: bool) -> R
         return Ok(());
     }
 
-    if state == "stopped" || state == "exited" {
+    if state == "stopped" || state == "exited" || state == "created" {
         if recreate {
             ctx.dim(&format!("  recreating {cname}"));
             ctx.container(["rm", &cname]).quiet_ok();
@@ -203,6 +263,170 @@ pub fn start(ctx: &Ctx, proj: &Project, services: &[String], recreate: bool) -> 
         start_service(ctx, proj, svc, recreate)?;
     }
     supervisor::ensure(ctx)?;
+    Ok(())
+}
+
+pub fn run_once(
+    ctx: &Ctx,
+    proj: &Project,
+    service: &str,
+    command: &[String],
+    keep: bool,
+    extra_env: &[String],
+    no_volumes: bool,
+) -> Result<std::process::ExitStatus> {
+    let name = proj.target_services(std::slice::from_ref(&service.to_string()))?[0].clone();
+    let svc = proj
+        .manifest
+        .service(&name)
+        .ok_or_else(|| anyhow!("no such service '{name}'"))?;
+    let cname = format!("{}-{}-run-{}", proj.name, name, crate::ctx::now_stamp());
+
+    daemon::ensure(ctx)?;
+    let vars = Vars::default();
+    login(ctx, proj, &vars, std::slice::from_ref(&svc.image)).ok();
+    if !no_volumes {
+        ensure_volumes(ctx, proj, svc);
+    }
+
+    let mut args: Vec<String> = vec!["run".into()];
+    if !keep {
+        args.push("--rm".into());
+    }
+    args.push("-i".into());
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        args.push("-t".into());
+    }
+    args.extend(resource_args(proj, svc, &cname, false, !no_volumes));
+    for kv in extra_env {
+        args.push("--env".into());
+        args.push(kv.clone());
+    }
+    args.push(svc.image.clone());
+    if command.is_empty() {
+        args.extend(svc.args.iter().cloned());
+    } else {
+        args.extend(command.iter().cloned());
+    }
+
+    ctx.info(&format!("running one-off {cname}"));
+    let status = ctx.container(&args).status()?;
+    supervisor::settle(ctx)?;
+    if keep {
+        ctx.dim(&format!("  kept as {cname} (remove with: container rm {cname})"));
+    }
+    Ok(status)
+}
+
+pub fn create(ctx: &Ctx, proj: &Project, services: &[String], recreate: bool) -> Result<()> {
+    let targets = proj.target_services(services)?;
+    daemon::ensure(ctx)?;
+
+    let vars = Vars::default();
+    let images: Vec<String> = proj
+        .manifest
+        .services
+        .iter()
+        .map(|s| s.image.clone())
+        .collect();
+    login(ctx, proj, &vars, &images).ok();
+
+    let snap = Snapshot::query(ctx);
+    for name in &targets {
+        let Some(svc) = proj.manifest.service(name) else {
+            continue;
+        };
+        let cname = proj.container_name(name);
+        let state = snap.state(&cname);
+        if state != "absent" {
+            if !recreate {
+                ctx.dim(&format!("  {cname} already exists ({state})"));
+                continue;
+            }
+            if state == "running" {
+                ctx.info(&format!("stopping {cname}"));
+                ctx.container(["stop", &cname]).quiet_ok();
+            }
+            ctx.container(["rm", &cname]).quiet_ok();
+        }
+        ensure_volumes(ctx, proj, svc);
+        ctx.info(&format!("creating {cname}"));
+        if ctx.container(create_args(proj, svc, &cname)).quiet_ok() {
+            ctx.ok(&format!("{cname} created (start with: ac {} start {name})", proj.name));
+        } else {
+            return Err(anyhow!("failed to create {cname}"));
+        }
+    }
+    supervisor::settle(ctx)
+}
+
+pub fn top(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
+    let targets = proj.target_services(services)?;
+    daemon::require(ctx)?;
+    let snap = Snapshot::query(ctx);
+
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for name in &targets {
+        let cname = proj.container_name(name);
+        if snap.state(&cname) != "running" {
+            if !ctx.json {
+                ctx.dim(&format!("  {cname} not running"));
+            }
+            continue;
+        }
+        let out = ctx
+            .container([
+                "exec",
+                &cname,
+                "sh",
+                "-c",
+                "ps aux 2>/dev/null || ps",
+            ])
+            .stdout()
+            .unwrap_or_default();
+        if ctx.json {
+            let lines: Vec<&str> = out.lines().collect();
+            items.push(serde_json::json!({
+                "service": name,
+                "container": cname,
+                "processes": lines,
+            }));
+        } else {
+            ctx.log(&style::bold(&cname));
+            for l in out.lines() {
+                ctx.log(&format!("  {l}"));
+            }
+        }
+    }
+    if ctx.json {
+        return ctx.emit_json(&serde_json::Value::Array(items));
+    }
+    Ok(())
+}
+
+pub fn export(ctx: &Ctx, proj: &Project, service: &str, output: Option<&Path>) -> Result<()> {
+    let name = proj.target_services(std::slice::from_ref(&service.to_string()))?[0].clone();
+    let cname = proj.container_name(&name);
+    daemon::require(ctx)?;
+
+    if Snapshot::query_silent(ctx).state(&cname) == "running" {
+        return Err(anyhow!(
+            "Apple container can only export a stopped container; run `ac {} stop {name}` first",
+            proj.name
+        ));
+    }
+
+    let path = output
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from(format!("{cname}.tar")));
+    ctx.info(&format!("exporting {cname} to {}", path.display()));
+    let status = ctx
+        .container(["export", "-o", &path.to_string_lossy(), &cname])
+        .status()?;
+    if !status.success() {
+        return Err(anyhow!("export of {cname} failed"));
+    }
+    ctx.ok(&format!("{}", path.display()));
     Ok(())
 }
 
