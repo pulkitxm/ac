@@ -225,13 +225,18 @@ pub enum Action {
     ///
     /// Examples:
     ///   ac shop start
-    ///   ac shop start redis clickhouse
+    ///   ac shop up redis clickhouse
     ///   ac shop start --recreate postgres
+    #[command(alias = "up")]
     Start {
         /// Delete and recreate containers instead of restarting them in place.
         /// Named volumes and their data survive.
         #[arg(long)]
         recreate: bool,
+        /// Accepted for docker compose muscle memory; every container is
+        /// detached anyway.
+        #[arg(short = 'd', long, hide = true)]
+        detach: bool,
         /// Services to act on. Empty means all of them. Either `redis` or
         /// `shop-redis` is accepted.
         services: Vec<String>,
@@ -305,6 +310,106 @@ pub enum Action {
         boot: bool,
         /// Service to read. Empty means every service, interleaved.
         service: Option<String>,
+    },
+
+    /// Run a one-off container from a service definition, compose run style.
+    ///
+    /// Starts a fresh container from the service's image, env and volumes,
+    /// named <project>-<svc>-run-<timestamp>, and removes it when the command
+    /// exits. Published ports are NOT bound, so it never conflicts with the
+    /// long-running service. Use `exec` instead to enter the container that
+    /// is already running.
+    ///
+    /// Examples:
+    ///   ac shop run postgres psql -U user -h shop-postgres
+    ///   ac shop run redis sh
+    ///   ac acplay run web --keep node --version
+    Run {
+        /// Keep the container after the command exits instead of removing it.
+        #[arg(long)]
+        keep: bool,
+        /// Extra KEY=VALUE environment entries, overriding the manifest.
+        #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Do not attach the service's named volumes.
+        #[arg(long)]
+        no_volumes: bool,
+        /// Service whose definition to run.
+        service: String,
+        /// Command to run. Empty means the image's default command.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// Create containers without starting them, compose create style.
+    ///
+    /// Runs `container create` with exactly the arguments `start` would use,
+    /// so a later `start` brings them up in place. Creates missing named
+    /// volumes first.
+    Create {
+        /// Recreate containers that already exist. Volumes and data survive.
+        #[arg(long)]
+        recreate: bool,
+        /// Services to create. Empty means all of them.
+        services: Vec<String>,
+    },
+
+    /// Processes running inside services, docker top style.
+    ///
+    /// Runs `ps aux` (falling back to plain `ps`) through `container exec`
+    /// in each running service.
+    Top {
+        /// Services to show. Empty means every running one.
+        services: Vec<String>,
+    },
+
+    /// Block until services are ready, then exit 0.
+    ///
+    /// A service with a readyCmd is polled through `container exec` until it
+    /// exits 0; one without is waited on until its container is running.
+    /// Exits non-zero on timeout, so scripts and agents can gate on it.
+    ///
+    /// Examples:
+    ///   ac shop wait
+    ///   ac shop wait postgres --timeout 30 && psql ...
+    Wait {
+        /// Seconds to wait per service before giving up. Defaults to each
+        /// service's readyTimeout.
+        #[arg(long)]
+        timeout: Option<u64>,
+        /// Services to wait for. Empty means all of them.
+        services: Vec<String>,
+    },
+
+    /// Push already-built image tags, without rebuilding.
+    ///
+    /// Resolves the same tags `build` would produce for the profile, logs in
+    /// to the registries those images come from, and runs
+    /// `container image push` per tag. postPush hooks do NOT run here.
+    ///
+    /// Examples:
+    ///   ac shop push --profile pre-prod
+    ///   ac shop push web -P dev
+    Push {
+        /// Profile whose registry, account and tag template to use.
+        #[arg(short = 'P', long)]
+        profile: Option<String>,
+        /// Builds whose tags to push. Empty means every build.
+        names: Vec<String>,
+    },
+
+    /// Export a service's filesystem as a tar archive.
+    ///
+    /// Runs: container export -o <output> <project>-<svc>. Unlike docker,
+    /// Apple container can only export a STOPPED container, so stop the
+    /// service first.
+    Export {
+        /// Service to export.
+        service: String,
+        /// Output path. Defaults to <project>-<service>.tar in the current
+        /// directory.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Run a command inside a service.
