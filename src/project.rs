@@ -1,12 +1,3 @@
-//! Turn a declarative project manifest into running containers.
-//!
-//! Adding a new project is dropping another JSON file into `projects/` or
-//! `~/.config/ac/projects/`; no code changes are needed.
-//!
-//! Container naming convention: `<project>-<service>`. That is also how ac
-//! recognises its own containers when deciding whether the daemon can be shut
-//! down, so it stays stable and predictable.
-
 use std::io::{BufRead, BufReader, Write};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,9 +14,6 @@ use crate::state::Snapshot;
 use crate::style;
 use crate::{daemon, supervisor};
 
-// ------------------------------------------------------------------ start ---
-
-/// Create any named volumes a service declares that do not exist yet.
 fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
     if svc.volumes.is_empty() {
         return;
@@ -58,8 +46,6 @@ fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
     }
 }
 
-/// Poll a service's `readyCmd` until it succeeds. Apple `container` has no
-/// healthcheck primitive, so readiness is implemented here.
 fn wait_ready(ctx: &Ctx, cname: &str, svc: &Service) {
     if svc.ready_cmd.is_empty() {
         return;
@@ -145,8 +131,6 @@ pub fn start_service(ctx: &Ctx, proj: &Project, name: &str, recreate: bool) -> R
         return Ok(());
     }
 
-    // A stopped container still has its filesystem: restart it in place rather
-    // than recreating, unless --recreate was asked for.
     if state == "stopped" || state == "exited" {
         if recreate {
             ctx.dim(&format!("  recreating {cname}"));
@@ -168,8 +152,6 @@ pub fn start_service(ctx: &Ctx, proj: &Project, name: &str, recreate: bool) -> R
     ctx.info(&format!("starting {cname}"));
     let args = run_args(proj, svc, &cname);
     if !ctx.container(&args).quiet_ok() {
-        // `container run` sometimes reports an error while the container is in
-        // fact created and running, so trust observed state over the exit code.
         thread::sleep(Duration::from_secs(2));
         if Snapshot::query(ctx).state(&cname) != "running" {
             return Err(anyhow!("failed to start {cname}"));
@@ -190,13 +172,10 @@ fn report_up(ctx: &Ctx, cname: &str) {
 }
 
 pub fn start(ctx: &Ctx, proj: &Project, services: &[String], recreate: bool) -> Result<()> {
-    // Resolve and validate before touching the daemon, so a typo does not leave
-    // a daemon started for nothing.
     let targets = proj.target_services(services)?;
 
     daemon::ensure(ctx)?;
 
-    // Only the images we are about to pull can justify a registry login.
     let vars = Vars::default();
     let images: Vec<String> = proj
         .manifest
@@ -213,7 +192,6 @@ pub fn start(ctx: &Ctx, proj: &Project, services: &[String], recreate: bool) -> 
     Ok(())
 }
 
-/// Pre-pull every image in the manifest so a later start is fast.
 pub fn pull(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     let targets = proj.target_services(services)?;
     daemon::ensure(ctx)?;
@@ -241,18 +219,6 @@ pub fn pull(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     Ok(())
 }
 
-// ------------------------------------------------------------------ login ---
-
-/// Authenticate to the project's private registries.
-///
-/// Credentials are never stored in the manifest: `passwordCmd` is an argv that
-/// is executed and piped to `--password-stdin`, which suits tokens that expire
-/// (AWS ECR tokens last 12 hours, so this re-runs on every start).
-///
-/// `images` acts as a filter: a registry is only contacted when one of those
-/// images actually comes from it. That keeps `ac <proj> start` from trying to
-/// authenticate to ECR just to pull postgres from docker.io. Pass an empty
-/// slice (an explicit `ac <proj> login`) to use every declared registry.
 pub fn login(ctx: &Ctx, proj: &Project, vars: &Vars, images: &[String]) -> Result<()> {
     if proj.manifest.registries.is_empty() {
         return Ok(());
@@ -261,8 +227,6 @@ pub fn login(ctx: &Ctx, proj: &Project, vars: &Vars, images: &[String]) -> Resul
     for reg in &proj.manifest.registries {
         let server = interpolate(&reg.server, vars);
 
-        // Skip malformed servers: an uninterpolated {{account}} leaves a
-        // leading dot, and a leftover brace means nothing was substituted.
         if server.is_empty() || server.starts_with('.') || server.contains("{{") {
             continue;
         }
@@ -323,11 +287,6 @@ pub fn login(ctx: &Ctx, proj: &Project, vars: &Vars, images: &[String]) -> Resul
     Ok(())
 }
 
-// ------------------------------------------------------------------- stop ---
-
-/// Stop containers WITHOUT removing them. The container keeps its filesystem
-/// and can be restarted in place, which is both faster and non-destructive.
-/// Use `down` when you actually want them gone.
 pub fn stop(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
@@ -348,8 +307,6 @@ pub fn stop(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     supervisor::settle(ctx)
 }
 
-/// Stop AND remove the containers. Named volumes are untouched, so data
-/// survives.
 pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
@@ -370,8 +327,6 @@ pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
 
     supervisor::settle(ctx)
 }
-
-// ----------------------------------------------------------------- status ---
 
 pub struct ServiceStatus {
     pub service: String,
@@ -402,8 +357,6 @@ pub fn status_rows(ctx: &Ctx, proj: &Project) -> Vec<ServiceStatus> {
 }
 
 pub fn print_status(ctx: &Ctx, proj: &Project, rows: &[ServiceStatus]) {
-    // Without a running daemon nothing can be queried and every container would
-    // be reported as "absent", which is a lie: they are merely unreachable.
     if !daemon::running_silent(ctx) {
         ctx.warn(&format!(
             "container daemon is not running - state unknown (run: ac {} start)",
@@ -446,9 +399,6 @@ pub fn status_json(rows: &[ServiceStatus]) -> serde_json::Value {
     )
 }
 
-// ------------------------------------------------------------------- logs ---
-
-/// Copy one child stream to stdout, prefixed and coloured by service name.
 fn spawn_prefixer<R: std::io::Read + Send + 'static>(
     stream: R,
     name: String,
@@ -465,10 +415,6 @@ fn spawn_prefixer<R: std::io::Read + Send + 'static>(
     })
 }
 
-/// Follow (or dump) every service at once, prefixing each line with the service
-/// name. `container logs` only handles a single container, so the fan-out and
-/// the interleaving are done here, the way `docker compose logs` behaves.
-/// Ctrl-C tears down the whole group rather than just the foreground wait.
 pub fn logs_all(ctx: &Ctx, proj: &Project, flags: &[String]) -> Result<()> {
     let palette = style::LOG_PALETTE;
 
@@ -485,8 +431,6 @@ pub fn logs_all(ctx: &Ctx, proj: &Project, flags: &[String]) -> Result<()> {
     let stopping = Arc::new(AtomicBool::new(false));
     {
         let stopping = stopping.clone();
-        // Best effort: the flag makes the reader threads stop printing, and the
-        // children receive SIGINT from the terminal's process group anyway.
         ctrlc::set_handler(move || stopping.store(true, Ordering::SeqCst)).ok();
     }
 
@@ -502,8 +446,6 @@ pub fn logs_all(ctx: &Ctx, proj: &Project, flags: &[String]) -> Result<()> {
         kill_list.push(child);
     }
 
-    // Wait for the readers, then reap every child so Ctrl-C leaves nothing
-    // behind.
     let watcher = {
         let stopping = stopping.clone();
         thread::spawn(move || loop {

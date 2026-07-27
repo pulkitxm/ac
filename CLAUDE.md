@@ -430,6 +430,31 @@ State lives in `~/.local/state/ac/`: `daemon.owned`, `supervisor.pid`,
 Put a manifest in `<repo>/projects/` instead when it should ship with the tool;
 a user file of the same name still wins.
 
+## Conventions
+
+**No comments in code.** Not in the Rust, not in the Makefile, not in
+`tests/e2e.sh`. Names and structure carry the meaning; anything that genuinely
+needs explaining belongs in this file instead. That is why the gotchas, the
+build root rules, the interpolation table and the ownership contract are all
+documented here at length rather than inline.
+
+Two exceptions, both because they are functional rather than explanatory:
+
+- `///` doc comments in `src/cli.rs`. clap turns these into the `--help` text,
+  so deleting one deletes user facing output.
+- `##` annotations on Makefile target lines. The `help` target parses them with
+  awk to build its own listing.
+
+Check for regressions:
+
+```
+grep -nE '^\s*//' src/*.rs | grep -v '^src/cli.rs'    # expect no output
+grep -nE '^\s*#' Makefile tests/e2e.sh | grep -v '#!' # expect no output
+```
+
+The bash implementation in `bin/` and `lib/` predates this rule and is left as
+it is; it is the reference spec, not active development.
+
 ## Testing
 
 ```

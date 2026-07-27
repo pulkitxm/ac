@@ -1,12 +1,3 @@
-//! ac - a project runner for Apple `container`.
-//!
-//!   ac noveum start      bring a project's containers up
-//!   ac noveum stop       stop them, keeping them for a fast restart
-//!   ac noveum down       stop and remove them
-//!
-//! See README.md and CLAUDE.md for the daemon ownership contract.
-
-// The manifest JSON Schema in `schema.rs` is one deeply nested `json!` literal.
 #![recursion_limit = "512"]
 
 mod build;
@@ -53,16 +44,10 @@ fn main() -> ExitCode {
     }
 }
 
-/// Expand the `ac <project> <action>` shorthand into the explicit
-/// `ac project <name> <action>` form clap understands.
-///
-/// Reserved words always win, which is why `-p <name>` exists as an
-/// unambiguous escape hatch for a project called `status` or `config`.
 fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     let prog = argv.first().cloned().unwrap_or_else(|| "ac".into());
     let rest = &argv[1..];
 
-    // Global flags that may sit in front of the first positional token.
     let is_global_flag = |s: &str| matches!(s, "--json" | "--quiet" | "-q" | "--no-color");
 
     let mut lead: Vec<String> = Vec::new();
@@ -75,7 +60,6 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     let mut out = vec![prog];
     out.extend(lead.clone());
 
-    // Explicit escape hatch: ac -p <name> <action>
     if i < rest.len() {
         let tok = rest[i].as_str();
         let (name, skip) = if tok == "-p" || tok == "--project" {
@@ -101,7 +85,6 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
         }
     }
 
-    // No positional token at all: let clap render the top level help.
     let Some(first) = rest.get(i) else {
         out.extend(rest.iter().cloned());
         return Ok(out);
@@ -112,7 +95,6 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
         return Ok(out);
     }
 
-    // A bare word: it must be a project.
     let probe = Ctx::new(false, true, true)?;
     let known = manifest::project_names(&probe.config_dir, &probe.ac_home);
     if !known.iter().any(|p| p == first) {
@@ -226,8 +208,6 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
-// ------------------------------------------------------------ global reads ---
-
 fn cmd_ls(ctx: &Ctx) -> Result<()> {
     let names = manifest::project_names(&ctx.config_dir, &ctx.ac_home);
     if !ctx.json {
@@ -260,7 +240,6 @@ fn cmd_global_status(ctx: &Ctx) -> Result<()> {
     let projects = manifest::load_all(&ctx.config_dir, &ctx.ac_home);
 
     if ctx.json {
-        // One snapshot for every project, rather than one per project.
         let snap = Snapshot::query(ctx);
         let items: Vec<serde_json::Value> = projects
             .iter()
@@ -310,8 +289,6 @@ fn cmd_global_status(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
-// --------------------------------------------------------- project actions ---
-
 fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
     match action {
         Action::Start { recreate, services } => project::start(ctx, proj, services, *recreate),
@@ -321,9 +298,6 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
         Action::Down { services } => project::down(ctx, proj, services),
 
         Action::Restart { recreate, services } => {
-            // Deliberately does NOT settle the daemon between the two halves:
-            // the bash version could stop an ac-owned daemon after the stop and
-            // immediately restart it for the start, which is pure churn.
             let targets = proj.target_services(services)?;
             let snap = Snapshot::query(ctx);
             for svc in &targets {
@@ -521,8 +495,6 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     .collect();
                 return ctx.emit_json(&serde_json::Value::Array(items));
             }
-            // A single named service prints just the address, so it can be
-            // dropped straight into another command.
             if targets.len() == 1 && !services.is_empty() {
                 println!(
                     "{}",
@@ -595,16 +567,11 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             };
             let root = build::resolve_root(ctx, proj, &ov)?;
             let vars = vars_for(proj, &name, &root);
-            // No image filter: an explicit login means every declared registry.
             project::login(ctx, proj, &vars, &[])
         }
     }
 }
 
-// ----------------------------------------------------------------- helpers ---
-
-/// Only request a TTY when we actually have one. Apple `container` rejects the
-/// exec with ENODEV otherwise, which is what breaks it in scripts and CI.
 fn tty_flags() -> Vec<String> {
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         vec!["-i".into(), "-t".into()]
@@ -613,7 +580,6 @@ fn tty_flags() -> Vec<String> {
     }
 }
 
-/// Turn `svc:/path` into `<project>-<svc>:/path`; leave host paths untouched.
 fn cp_path(proj: &Project, arg: &str) -> String {
     if arg.starts_with('/') {
         return arg.to_string();
@@ -621,7 +587,6 @@ fn cp_path(proj: &Project, arg: &str) -> String {
     let Some((head, tail)) = arg.split_once(':') else {
         return arg.to_string();
     };
-    // A slash before the colon means it is a host path, not svc:/path.
     if head.contains('/') {
         return arg.to_string();
     }
@@ -634,8 +599,6 @@ fn cp_path(proj: &Project, arg: &str) -> String {
     arg.to_string()
 }
 
-/// Propagate a child's failure without printing an extra ac error line: the
-/// child has already said whatever it had to say.
 fn exit_like(status: std::process::ExitStatus) -> Result<()> {
     if status.success() {
         Ok(())

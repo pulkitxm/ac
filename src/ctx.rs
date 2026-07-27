@@ -1,11 +1,3 @@
-//! Shared state: paths, configuration, logging and the command runner.
-//!
-//! Everything that the bash implementation kept in `lib/common.sh` lives here.
-//! The one rule worth remembering: every `container` invocation goes through
-//! [`Runner`], which echoes the command before running it, so any step can be
-//! copied and re-run by hand and an agent reading the output can see exactly
-//! what was executed.
-
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
@@ -19,18 +11,12 @@ use crate::style;
 
 pub const AC_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// `~/.config/ac/config.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// Passed as `--app-root` every time `ac` starts the daemon. Apple
-    /// `container` does not remember it, so it must be supplied on each start.
     pub app_root: String,
-    /// APFS sparse bundle backing `app_root`, attached before the daemon starts.
     pub sparse_bundle: String,
-    /// Mount point the sparse bundle appears at once attached.
     pub image_mount: String,
-    /// Seconds `container system start` is allowed to take.
     pub start_timeout: u64,
 }
 
@@ -45,7 +31,6 @@ impl Default for Config {
     }
 }
 
-// The on-disk file uses camelCase keys, matching the bash implementation.
 impl Config {
     fn from_json(v: &serde_json::Value) -> Self {
         let d = Config::default();
@@ -82,22 +67,15 @@ impl Config {
     }
 }
 
-/// Process-wide context handed to every subsystem.
 pub struct Ctx {
-    /// Emit machine readable JSON instead of a human table. Implies `quiet`.
     pub json: bool,
-    /// Suppress the `$ container ...` echo. Set by `--quiet` or `AC_QUIET=1`.
     pub quiet: bool,
-    /// Whether ANSI colour is allowed on stdout.
     pub color: bool,
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
-    /// Presence of this file is the single source of truth for "ac started the
-    /// daemon, so ac is allowed to stop it".
     pub owner_file: PathBuf,
     pub supervisor_pidfile: PathBuf,
     pub supervisor_log: PathBuf,
-    /// Repository root, used to find the bundled `projects/` directory.
     pub ac_home: PathBuf,
     pub config: Config,
 }
@@ -117,7 +95,6 @@ impl Ctx {
         fs::create_dir_all(&config_dir).ok();
         fs::create_dir_all(&state_dir).ok();
 
-        // JSON output must stay parseable, so it forces the echo off.
         let quiet = quiet || json || env::var_os("AC_QUIET").is_some();
         let color =
             !no_color && !json && env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
@@ -140,9 +117,6 @@ impl Ctx {
         Ok(ctx)
     }
 
-    /// Seed a config file on first run. If the daemon happens to be running we
-    /// adopt its current appRoot, so `ac` keeps using the image store the user
-    /// already has rather than silently starting a second one.
     fn load_or_seed_config(&self) -> Result<Config> {
         if self.config_file.exists() {
             let text = fs::read_to_string(&self.config_file)
@@ -165,10 +139,6 @@ impl Ctx {
         Ok(cfg)
     }
 
-    // ------------------------------------------------------------ logging ---
-
-    /// Human log lines go to stdout normally, but to stderr in `--json` mode so
-    /// that stdout stays a single parseable document.
     fn out(&self, line: &str) {
         if self.json {
             eprintln!("{line}");
@@ -196,16 +166,12 @@ impl Ctx {
         eprintln!("{} {msg}", style::red(" err"));
     }
 
-    /// Print a JSON document to stdout.
     pub fn emit_json(&self, v: &serde_json::Value) -> Result<()> {
         let mut stdout = io::stdout();
         writeln!(stdout, "{}", serde_json::to_string_pretty(v)?)?;
         Ok(())
     }
 
-    // ------------------------------------------------------------ running ---
-
-    /// A `container` command, echoed before it runs.
     pub fn container<I, S>(&self, args: I) -> Runner<'_>
     where
         I: IntoIterator<Item = S>,
@@ -218,7 +184,6 @@ impl Ctx {
         )
     }
 
-    /// Any other external command, echoed the same way.
     pub fn exec<I, S>(&self, prog: &str, args: I) -> Runner<'_>
     where
         I: IntoIterator<Item = S>,
@@ -232,13 +197,11 @@ impl Ctx {
     }
 }
 
-/// A single external command invocation.
 pub struct Runner<'a> {
     ctx: &'a Ctx,
     prog: String,
     args: Vec<String>,
     cwd: Option<PathBuf>,
-    /// Suppress the echo for this one command (used by hot polling loops).
     silent: bool,
 }
 
@@ -258,8 +221,6 @@ impl<'a> Runner<'a> {
         self
     }
 
-    /// Do not echo this invocation. Reserved for the supervisor's poll loop and
-    /// for readiness probes, which would otherwise flood the output.
     pub fn silent(mut self) -> Self {
         self.silent = true;
         self
@@ -290,7 +251,6 @@ impl<'a> Runner<'a> {
         c
     }
 
-    /// Run with stdio inherited, returning the exit status.
     pub fn status(&self) -> Result<ExitStatus> {
         self.echo();
         self.build()
@@ -298,7 +258,6 @@ impl<'a> Runner<'a> {
             .with_context(|| format!("running: {}", self.display()))
     }
 
-    /// Run with stdout and stderr discarded. Returns true on exit code 0.
     pub fn quiet_ok(&self) -> bool {
         self.echo();
         self.build()
@@ -309,7 +268,6 @@ impl<'a> Runner<'a> {
             .unwrap_or(false)
     }
 
-    /// Run capturing stdout and stderr.
     pub fn output(&self) -> Result<Output> {
         self.echo();
         self.build()
@@ -317,8 +275,6 @@ impl<'a> Runner<'a> {
             .with_context(|| format!("running: {}", self.display()))
     }
 
-    /// Run capturing stdout only; stderr is discarded. Returns stdout as a
-    /// string, or an error when the command fails.
     pub fn stdout(&self) -> Result<String> {
         let out = {
             self.echo();
@@ -333,7 +289,6 @@ impl<'a> Runner<'a> {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
 
-    /// Spawn without waiting, with stdio inherited.
     pub fn spawn_piped(&self) -> Result<std::process::Child> {
         self.echo();
         self.build()
@@ -349,16 +304,12 @@ impl<'a> Runner<'a> {
     }
 }
 
-// ------------------------------------------------------------------ helpers ---
-
 pub fn home_dir() -> Result<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("HOME is not set"))
 }
 
-/// Quote an argument only when it needs it, so the echoed line stays readable
-/// but remains copy-pasteable into a shell.
 pub fn shell_quote(s: &str) -> String {
     if !s.is_empty()
         && s.chars()
@@ -369,11 +320,6 @@ pub fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
-/// Where the bundled `projects/` directory lives.
-///
-/// `$AC_HOME` wins. Otherwise walk up from the resolved executable looking for
-/// a directory that contains `projects/`, which covers both
-/// `<repo>/target/release/ac` and a symlink into `~/.local/bin`.
 fn ac_home() -> PathBuf {
     if let Some(h) = env::var_os("AC_HOME") {
         return PathBuf::from(h);
@@ -391,7 +337,6 @@ fn ac_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// `appRoot` of a daemon that is already up, used only to seed the config file.
 fn probe_running_app_root() -> Option<String> {
     let out = Command::new("container")
         .args(["system", "status"])
@@ -404,7 +349,6 @@ fn probe_running_app_root() -> Option<String> {
     parse_app_root(&String::from_utf8_lossy(&out.stdout))
 }
 
-/// Pull the `appRoot` value out of `container system status` table output.
 pub fn parse_app_root(text: &str) -> Option<String> {
     for line in text.lines() {
         if let Some(rest) = line.strip_prefix("appRoot") {
@@ -417,8 +361,6 @@ pub fn parse_app_root(text: &str) -> Option<String> {
     None
 }
 
-/// `date +<fmt>`, matching what the bash implementation produced. Shelling out
-/// avoids pulling in a date library for two format strings.
 pub fn now_stamp() -> String {
     Command::new("date")
         .arg("+%Y%m%d%H%M%S")
