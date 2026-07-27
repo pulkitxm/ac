@@ -54,23 +54,79 @@ Requires `jq` and Apple `container` 1.1.0+.
 
 ## Usage
 
-```
-ac <project> start           bring every service up, in manifest order
-ac <project> stop            stop and remove them
-ac <project> restart
-ac <project> status | ps     per-service state, IP, published ports
-ac <project> logs <service>
-ac <project> exec <service> <cmd...>
-ac <project> ip [service]
+Most actions take optional service names and default to every service, so
+`ac shop restart` restarts the stack and `ac shop restart redis` restarts
+one container. Services can be named either bare (`redis`) or by container name
+(`shop-redis`), since the latter is what `ac shop ls` prints.
 
-ac ls                        list projects
-ac status                    daemon + supervisor + every project
-ac daemon status             who owns the daemon right now
-ac daemon stop               stop it, only if ac started it
-ac config                    resolved configuration
+```
+ac <project> start [svc...]        start services
+ac <project> stop [svc...]         stop and remove services
+ac <project> restart [svc...]      stop then start
+ac <project> ls | ps | status      per-service state, IP, published ports
+ac <project> logs [-f] [-n N] [svc]  logs; no service means all, interleaved
+ac <project> exec <svc> <cmd...>   run a command in a service
+ac <project> sh [svc]              interactive shell (bash if present, else sh)
+ac <project> stats [svc...]        live resource usage
+ac <project> inspect [svc...]      full container JSON
+ac <project> kill [-s SIG] [svc..] send a signal, default KILL
+ac <project> rm [svc...]           force remove containers, keeping volumes
+ac <project> cp <src> <dst>        copy files; svc:/path for the container side
+ac <project> pull [svc...]         pre-pull images
+ac <project> images                images this project uses
+ac <project> port [svc]            published port mappings
+ac <project> ip [svc]              container IPs
+ac <project> env <svc>             environment from the manifest
+ac <project> login                 authenticate to private registries
+ac <project> config                the project manifest
+
+ac ls                              list projects
+ac status                          daemon + supervisor + every project
+ac daemon status                   who owns the daemon right now
+ac daemon stop                     stop it, only if ac started it
+ac images                          every image in the local store
+ac df                              disk usage
+ac prune                           remove stopped containers, unused images
+ac config                          resolved configuration
 ```
 
-Tab completion covers projects, actions and service names.
+`ac <project> logs -f` with no service follows every container at once, each
+line prefixed and coloured by service, the way `docker compose logs -f` does.
+Apple `container logs` only handles one container, so the fan-out happens in
+`ac` and Ctrl-C tears down the whole group.
+
+Tab completion covers projects, actions, service names (both forms), flags and
+signal names, in zsh and bash.
+
+## Private registries (AWS ECR, GHCR, and friends)
+
+Declare a `registries` block and `ac` authenticates before pulling, on every
+`start` and `pull`. Credentials are never written into the manifest: you give a
+`passwordCmd` argv that is executed and piped to `--password-stdin`.
+
+```json
+{
+  "name": "myapp",
+  "registries": [
+    {
+      "server": "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+      "username": "AWS",
+      "passwordCmd": ["aws", "ecr", "get-login-password", "--region", "us-east-1"]
+    }
+  ],
+  "services": [
+    { "name": "api", "image": "123456789012.dkr.ecr.us-east-1.amazonaws.com/api:latest" }
+  ]
+}
+```
+
+Re-running on every start matters for ECR, whose tokens expire after 12 hours.
+`ac <project> login` runs the same step on its own. The pattern works for any
+registry that takes a username and a token on stdin:
+
+```json
+{ "server": "ghcr.io", "username": "pulkitxm", "passwordCmd": ["gh", "auth", "token"] }
+```
 
 ## Adding a project
 
