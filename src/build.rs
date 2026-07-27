@@ -1002,6 +1002,89 @@ fn run_basic(
     }
 }
 
+pub fn project_push(ctx: &Ctx, proj: &Project, names: &[String], profile_arg: Option<&str>) -> Result<()> {
+    let ov = BuildOverrides {
+        profile: profile_arg.map(String::from),
+        ..Default::default()
+    };
+    let profile = ov.profile_name();
+    if proj.manifest.profiles.get(&profile).is_none() {
+        return Err(anyhow!(
+            "unknown profile '{profile}' (have: {})",
+            proj.manifest.profiles.keys().collect::<Vec<_>>().join(", ")
+        ));
+    }
+
+    let all = proj.manifest.build_names();
+    let targets: Vec<String> = if names.is_empty() {
+        all.clone()
+    } else {
+        for n in names {
+            if !all.contains(n) {
+                return Err(anyhow!("no such build '{n}' (have: {})", all.join(" ")));
+            }
+        }
+        names.to_vec()
+    };
+    if targets.is_empty() {
+        return Err(anyhow!("project '{}' declares no builds", proj.name));
+    }
+
+    let root = resolve_root(ctx, proj, &ov)?;
+    let vars = vars_for(proj, &profile, &root);
+
+    let entries: Vec<Build> = targets
+        .iter()
+        .filter_map(|t| proj.manifest.build(t).cloned())
+        .collect();
+    let images: Vec<String> = entries
+        .iter()
+        .map(|b| interpolate(&b.image, &vars))
+        .collect();
+
+    daemon::ensure(ctx)?;
+    project::login(ctx, proj, &vars, &images).ok();
+
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for b in &entries {
+        let image = interpolate(&b.image, &vars);
+        let tags: Vec<String> = b
+            .tags
+            .iter()
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("{image}:{}", interpolate(t, &vars)))
+            .collect();
+        let mut pushed: Vec<String> = Vec::new();
+        for t in &tags {
+            ctx.info(&format!("pushing {t}"));
+            if ctx.container(["image", "push", t.as_str()]).status()?.success() {
+                ctx.ok(t);
+                pushed.push(t.clone());
+            } else {
+                ctx.err(&format!("push failed: {t}"));
+                failures.push(b.name.clone());
+            }
+        }
+        results.push(serde_json::json!({
+            "build": b.name,
+            "profile": profile,
+            "tags": tags,
+            "pushed": pushed,
+        }));
+    }
+
+    if ctx.json {
+        ctx.emit_json(&serde_json::Value::Array(results))?;
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        failures.dedup();
+        Err(anyhow!("push failed for: {}", failures.join(", ")))
+    }
+}
+
 fn report(ctx: &Ctx, outcomes: &[Outcome]) -> Result<()> {
     if ctx.json {
         let items: Vec<serde_json::Value> = outcomes.iter().map(|o| o.to_json()).collect();

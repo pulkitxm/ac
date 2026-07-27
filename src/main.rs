@@ -272,7 +272,34 @@ fn cmd_global_status(ctx: &Ctx) -> Result<()> {
 
 fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
     match action {
-        Action::Start { recreate, services } => project::start(ctx, proj, services, *recreate),
+        Action::Start {
+            recreate,
+            detach: _,
+            services,
+        } => project::start(ctx, proj, services, *recreate),
+
+        Action::Run {
+            keep,
+            env,
+            no_volumes,
+            service,
+            command,
+        } => {
+            let status = project::run_once(ctx, proj, service, command, *keep, env, *no_volumes)?;
+            exit_like(status)
+        }
+
+        Action::Create { recreate, services } => project::create(ctx, proj, services, *recreate),
+
+        Action::Top { services } => project::top(ctx, proj, services),
+
+        Action::Wait { timeout, services } => project::wait(ctx, proj, services, *timeout),
+
+        Action::Push { profile, names } => build::project_push(ctx, proj, names, profile.as_deref()),
+
+        Action::Export { service, output } => {
+            project::export(ctx, proj, service, output.as_deref())
+        }
 
         Action::Stop { services } => project::stop(ctx, proj, services),
 
