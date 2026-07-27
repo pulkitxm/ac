@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# ac - a tiny project runner for Apple `container`.
+#
+#   ac novasynth start      bring a project's containers up
+#   ac novasynth stop       tear them down (and the daemon, if ac started it)
+#
+# See README.md for the daemon ownership rules.
+
+set -uo pipefail
+
+AC_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export AC_HOME
+
+. "$AC_HOME/lib/common.sh"
+. "$AC_HOME/lib/daemon.sh"
+. "$AC_HOME/lib/supervisor.sh"
+. "$AC_HOME/lib/project.sh"
+
+require jq
+require container
+
+usage() {
+  cat <<EOF
+${C_BOLD}ac${C_RESET} - Apple Container project runner (v$AC_VERSION)
+
+${C_BOLD}USAGE${C_RESET}
+  ac <project> <action> [args]
+  ac <command>
+
+${C_BOLD}PROJECT ACTIONS${C_RESET}
+  start                 start every service in the project
+  stop                  stop and remove them
+  restart               stop then start
+  status, ps            per-service state, IP and published ports
+  logs <service>        tail a service's logs
+  exec <service> <cmd>  run a command inside a service
+  ip [service]          print container IPs
+
+${C_BOLD}COMMANDS${C_RESET}
+  ls, projects          list available projects
+  status                daemon + all project status
+  daemon status         show daemon state and who owns it
+  daemon stop           stop the daemon (only if ac started it)
+  config                show resolved config
+  help, version
+
+${C_BOLD}PROJECTS${C_RESET}
+$(ac_project_names | sed 's/^/  /')
+
+Projects are JSON files in $AC_HOME/projects
+or $AC_CONFIG_DIR/projects (user overrides win).
+EOF
+}
+
+cmd_global_status() {
+  printf '%sdaemon%s  %s\n' "$C_BOLD" "$C_RESET" "$(daemon_status_line)"
+  if supervisor_running; then
+    printf '%ssupervisor%s  running (pid %s)\n' "$C_BOLD" "$C_RESET" "$(supervisor_pid)"
+  else
+    printf '%ssupervisor%s  not running\n' "$C_BOLD" "$C_RESET"
+  fi
+  echo
+  local p
+  ac_project_names | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s%s%s - %s\n' "$C_BOLD" "$p" "$C_RESET" "$(proj_description "$p")"
+    project_status "$p"
+    echo
+  done
+}
+
+main() {
+  ac_config_init
+
+  local first="${1:-help}"
+
+  case "$first" in
+    help|-h|--help)   usage; return 0 ;;
+    version|-v|--version) echo "ac $AC_VERSION"; return 0 ;;
+    ls|projects)      ac_project_names; return 0 ;;
+    config)           cat "$AC_CONFIG_FILE"; return 0 ;;
+    status)           cmd_global_status; return 0 ;;
+    __supervise)      supervisor_loop; return 0 ;;
+    daemon)
+      case "${2:-status}" in
+        status) daemon_status_line ;;
+        stop)   supervisor_stop; daemon_release ;;
+        *)      die "unknown daemon action: ${2:-}" ;;
+      esac
+      return 0
+      ;;
+  esac
+
+  # Everything else is <project> <action>.
+  local proj="$first" action="${2:-status}"
+  ac_project_file "$proj" >/dev/null || die "unknown project: $proj (try: ac ls)"
+  shift 2 2>/dev/null || shift 1
+
+  case "$action" in
+    start)    project_start "$proj" ;;
+    stop)     project_stop "$proj" ;;
+    restart)  project_stop "$proj"; project_start "$proj" ;;
+    status|ps) project_status "$proj" ;;
+    logs)
+      [ $# -ge 1 ] || die "usage: ac $proj logs <service>"
+      container logs "$(svc_container_name "$proj" "$1")"
+      ;;
+    exec)
+      [ $# -ge 2 ] || die "usage: ac $proj exec <service> <command...>"
+      local svc="$1"; shift
+      container exec -i -t "$(svc_container_name "$proj" "$svc")" "$@"
+      ;;
+    ip)
+      if [ $# -ge 1 ]; then
+        container_ip "$(svc_container_name "$proj" "$1")"
+      else
+        local s
+        proj_services "$proj" | while IFS= read -r s; do
+          [ -n "$s" ] || continue
+          printf '%-22s %s\n' "$s" "$(container_ip "$(svc_container_name "$proj" "$s")")"
+        done
+      fi
+      ;;
+    *) die "unknown action: $action (try: ac help)" ;;
+  esac
+}
+
+main "$@"
