@@ -6,6 +6,7 @@ mod completions;
 mod ctx;
 mod daemon;
 mod manifest;
+mod progress;
 mod project;
 mod schema;
 mod state;
