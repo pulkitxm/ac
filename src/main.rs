@@ -5,6 +5,7 @@ mod cli;
 mod completions;
 mod ctx;
 mod daemon;
+mod global;
 mod manifest;
 mod progress;
 mod project;
@@ -172,40 +173,14 @@ fn run(cli: Cli) -> Result<()> {
                 daemon::release(&ctx)
             }
         },
-        TopCommand::Images => {
-            daemon::ensure(&ctx)?;
-            if ctx.json {
-                let text = ctx
-                    .container(["image", "ls", "--format", "json"])
-                    .stdout()?;
-                let v: serde_json::Value = serde_json::from_str(&text)?;
-                ctx.emit_json(&v)
-            } else {
-                ctx.container(["image", "ls"]).status()?;
-                Ok(())
-            }
-        }
-        TopCommand::Df => {
-            daemon::ensure(&ctx)?;
-            if ctx.json {
-                let text = ctx
-                    .container(["system", "df", "--format", "json"])
-                    .stdout()?;
-                let v: serde_json::Value = serde_json::from_str(&text)?;
-                ctx.emit_json(&v)
-            } else {
-                ctx.container(["system", "df"]).status()?;
-                Ok(())
-            }
-        }
-        TopCommand::Prune => {
-            daemon::ensure(&ctx)?;
-            ctx.info("removing stopped containers");
-            ctx.container(["prune"]).status()?;
-            ctx.info("removing unused images");
-            ctx.container(["image", "prune"]).status()?;
-            supervisor::settle(&ctx)
-        }
+        TopCommand::Ps { all } => global::ps(&ctx, *all),
+        TopCommand::Image { action } => global::image(&ctx, action.as_ref()),
+        TopCommand::Volume { action } => global::volume(&ctx, action.as_ref()),
+        TopCommand::Network { action } => global::network(&ctx, action.as_ref()),
+        TopCommand::System { action } => global::system(&ctx, action.as_ref()),
+        TopCommand::Registry { action } => global::registry(&ctx, action.as_ref()),
+        TopCommand::Df => global::system(&ctx, Some(&cli::SystemAction::Df)),
+        TopCommand::Prune => global::system(&ctx, Some(&cli::SystemAction::Prune)),
         TopCommand::Supervise => supervisor::run_loop(&ctx),
         TopCommand::Project { name, action } => {
             let proj = manifest::load_project(&ctx.config_dir, &ctx.ac_home, name)?;
