@@ -91,8 +91,6 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     }
 
     let Some(first) = rest.get(i) else {
-        // The leading global flags are already in `out`; copying from 0 here
-        // would duplicate them and clap rejects a repeated flag.
         out.extend(rest[i..].iter().cloned());
         return Ok(out);
     };

@@ -157,6 +157,47 @@ FROM base AS final
 RUN echo final > /final.txt
 DOCKER
 
+if [ ! -f "$REPO/extras/express-app/Dockerfile" ]; then
+  mkdir -p "$REPO/extras/express-app"
+  cat > "$REPO/extras/express-app/package.json" <<'JSON'
+{
+  "name": "ac-playground-express",
+  "version": "1.4.2",
+  "private": true,
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.19.2" }
+}
+JSON
+  cat > "$REPO/extras/express-app/server.js" <<'JS'
+const express = require("express");
+const app = express();
+const port = process.env.PORT || 3000;
+app.get("/", (_req, res) => {
+  res.json({ app: "ac-playground-express", env: process.env.APP_MESSAGE || "no message set" });
+});
+app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+app.listen(port, () => console.log(`listening on ${port}`));
+JS
+  cat > "$REPO/extras/express-app/Dockerfile" <<'DOCKER'
+FROM docker.io/library/node:20-alpine AS deps
+WORKDIR /app
+COPY package.json ./
+RUN npm install --omit=dev
+
+FROM docker.io/library/node:20-alpine AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json server.js ./
+RUN addgroup -S app && adduser -S app -G app
+USER app
+EXPOSE 3000
+CMD ["node", "server.js"]
+DOCKER
+  note "recreated extras/express-app playground"
+fi
+
 PRE_RUNNING=""
 PRE_DAEMON="no"
 daemon_up && PRE_DAEMON="yes"
@@ -348,8 +389,100 @@ scen "i. a failing hook aborts the build and reports an error"
   check_contains "i2 the failure names the hook" "$out" "preflight failed"
   check_not_contains "i3 it never reached the build itself" "$out" "container build"
 
+scen "l. docker-style global commands"
+  got=$("$AC" --json ps 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+hit=[r for r in d if r.get('container')=='actest1-alpha']
+print('ok' if hit and hit[0].get('project')=='actest1' and hit[0].get('service')=='alpha' else 'bad:'+str(hit))
+" 2>&1)
+  check "l1 ac ps --json attributes containers to projects" "$got" "ok"
+
+  got=$("$AC" --json image ls 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('ok' if isinstance(d,list) and d else 'bad')
+" 2>&1)
+  check "l2 ac image ls --json parses" "$got" "ok"
+
+  got=$("$AC" --json volume ls 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('ok' if isinstance(d,list) else 'bad')
+" 2>&1)
+  check "l3 ac volume ls --json parses" "$got" "ok"
+
+  got=$("$AC" --json system info 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('ok' if d.get('daemon',{}).get('running') is True else 'bad:'+str(d))
+" 2>&1)
+  check "l4 ac system info --json parses" "$got" "ok"
+
+  check_contains "l5 ac guide teaches the docker mapping" "$("$AC" guide 2>/dev/null)" "docker compose up"
+  check_contains "l6 ac guide claude emits a snippet" "$("$AC" guide claude 2>/dev/null)" "use ac"
+
+  "$AC" system stop >/dev/null 2>&1
+  check "l7 system stop refuses to touch an external daemon" "$(daemon_up && echo yes || echo no)" "yes"
+
+scen "m. compose-style verbs"
+  "$AC" actest1 up >/dev/null 2>&1; rc=$?
+  check "m1 up aliases start" "$([ $rc -eq 0 ] && echo ok || echo failed)" "ok"
+
+  "$AC" actest1 wait --timeout 20 >/dev/null 2>&1; rc=$?
+  check "m2 wait exits zero when ready" "$([ $rc -eq 0 ] && echo ok || echo failed)" "ok"
+
+  got=$("$AC" --json actest1 wait 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('ok' if all(r['ready'] for r in d) else 'bad:'+str(d))
+" 2>&1)
+  check "m3 wait --json reports per-service readiness" "$got" "ok"
+
+  out=$("$AC" actest1 run beta echo one-off-ok </dev/null 2>/dev/null)
+  check_contains "m4 run executes a one-off command" "$out" "one-off-ok"
+  leftovers=$(container ls -a --format json 2>/dev/null | grep -c 'actest1-beta-run')
+  check "m5 the one-off container removed itself" "$leftovers" "0"
+
+  out=$("$AC" actest1 run alpha --no-volumes cat /etc/alpine-release </dev/null 2>/dev/null)
+  check_contains "m6 run --no-volumes works alongside the live service" "$out" "3.2"
+
+  "$AC" actest1 down beta >/dev/null 2>&1
+  "$AC" actest1 create beta >/dev/null 2>&1
+  st=$(cstate actest1-beta)
+  check "m7 create makes the container without starting it" "$([ "$st" != "absent" ] && [ "$st" != "running" ] && echo ok || echo "bad:$st")" "ok"
+  "$AC" actest1 start beta >/dev/null 2>&1
+  check "m8 start brings a created container up in place" "$(cstate actest1-beta)" "running"
+
+  out=$("$AC" actest1 top 2>/dev/null)
+  check_contains "m9 top shows in-container processes" "$out" "sleep"
+
+  err=$("$AC" actest1 export alpha 2>&1 >/dev/null); rc=$?
+  check "m10 export refuses a running service" "$([ $rc -ne 0 ] && echo nonzero || echo zero)" "nonzero"
+  check_contains "m11 the refusal says what to do" "$err" "stop"
+
+  "$AC" actest1 stop beta >/dev/null 2>&1
+  "$AC" actest1 export beta -o /tmp/ac-e2e-beta.tar >/dev/null 2>&1
+  check "m12 export writes a tar of a stopped service" "$([ -s /tmp/ac-e2e-beta.tar ] && echo ok || echo failed)" "ok"
+  rm -f /tmp/ac-e2e-beta.tar
+  "$AC" actest1 start beta >/dev/null 2>&1
+
+scen "n. build summaries"
+  got=$("$AC" --json actest1 build tiny 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+r=d[0]
+print('ok' if r['build']=='tiny' and r['ok'] is True and r['steps']['done']>=1 and any('ac-e2e-tiny:e2e' in t for t in r['tags']) else 'bad:'+str(r))
+" 2>&1)
+  check "n1 build --json emits the outcome summary" "$got" "ok"
+
+  out=$("$AC" actest1 build tiny 2>&1)
+  check_contains "n2 non-tty builds stream raw buildkit lines" "$out" "DONE"
+  check_contains "n3 the run ends with a summary table" "$out" "BUILD"
+  check_contains "n4 and an overall verdict" "$out" "all builds finished"
+
 else
-  scen "a/d/e/f/h/i/j SKIPPED: no daemon was running when the suite started"
+  scen "a/d/e/f/h/i/j/l/m/n SKIPPED: no daemon was running when the suite started"
 fi
 
 scen "g. shell completions generate"
@@ -361,6 +494,20 @@ scen "g. shell completions generate"
   check "g4 bash completion is syntactically valid" "$(bash -n /tmp/ac-e2e-comp.bash 2>&1 && echo ok)" "ok"
   check_contains "g5 zsh completion mentions the tool" "$(cat /tmp/ac-e2e-comp.zsh)" "#compdef ac"
   rm -f /tmp/ac-e2e-comp.zsh /tmp/ac-e2e-comp.bash
+
+FOREIGN=""
+for c in $PRE_RUNNING; do
+  case "$c" in
+    actest1-*|actest2-*|buildkit) ;;
+    *) FOREIGN="$FOREIGN $c" ;;
+  esac
+done
+
+if [ -n "$FOREIGN" ] && [ "${AC_E2E_DAEMON:-}" != "1" ]; then
+  scen "b/c/k SKIPPED: containers not owned by this suite are running (${FOREIGN# })"
+  note "these scenarios stop the daemon, which would stop them too"
+  note "set AC_E2E_DAEMON=1 to run them anyway"
+else
 
 scen "b/c setup: stopping everything so ac can be the one to start the daemon"
   "$AC" actest1 down >/dev/null 2>&1
@@ -435,6 +582,8 @@ scen "k. the supervisor debounce reaps the daemon when containers vanish behind 
   log_tail=$(tail -20 "$STATE_DIR/supervisor.log" 2>/dev/null)
   check_contains "k7 the log shows it armed before acting"     "$log_tail" "armed"
   check_contains "k8 the log shows consecutive idle polls"     "$log_tail" "idle poll"
+
+fi
 
 printf '\n\033[1m== summary\033[0m\n'
 for r in "${RESULTS[@]}"; do

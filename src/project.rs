@@ -15,8 +15,6 @@ use crate::state::Snapshot;
 use crate::style;
 use crate::{daemon, supervisor};
 
-/// Volume names the daemon currently has. The daemon reports these as `id`,
-/// with the same string under `configuration.name`.
 pub fn existing_volumes(ctx: &Ctx) -> Vec<String> {
     ctx.container(["volume", "ls", "--format", "json"])
         .silent()
@@ -722,4 +720,78 @@ pub fn logs_all(ctx: &Ctx, proj: &Project, flags: &[String]) -> Result<()> {
     stopping.store(true, Ordering::SeqCst);
     watcher.join().ok();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proj() -> Project {
+        let raw = r#"{
+            "name": "demo",
+            "services": [
+              {
+                "name": "db",
+                "image": "docker.io/library/postgres:16-alpine",
+                "cpus": 2,
+                "memory": "1g",
+                "ports": ["5433:5432"],
+                "env": { "POSTGRES_USER": "user" },
+                "volumes": [{ "name": "db-data", "target": "/var/lib/postgresql/data" }],
+                "args": ["postgres", "-c", "max_connections=50"]
+              }
+            ]
+        }"#;
+        Project {
+            name: "demo".into(),
+            file: std::path::PathBuf::from("/tmp/demo.json"),
+            manifest: serde_json::from_str(raw).unwrap(),
+            raw: raw.into(),
+        }
+    }
+
+    #[test]
+    fn run_args_carry_everything_detached() {
+        let p = proj();
+        let svc = p.manifest.service("db").unwrap();
+        let args = run_args(&p, svc, "demo-db");
+        let joined = args.join(" ");
+        assert!(joined.starts_with("run -d --progress none"), "{joined}");
+        assert!(joined.contains("--name demo-db"), "{joined}");
+        assert!(joined.contains("--label ac.project=demo"), "{joined}");
+        assert!(joined.contains("--cpus 2"), "{joined}");
+        assert!(joined.contains("--memory 1g"), "{joined}");
+        assert!(joined.contains("--env POSTGRES_USER=user"), "{joined}");
+        assert!(joined.contains("--publish 5433:5432"), "{joined}");
+        assert!(
+            joined.contains("--volume demo-db-data:/var/lib/postgresql/data"),
+            "{joined}"
+        );
+        assert!(
+            joined.ends_with("docker.io/library/postgres:16-alpine postgres -c max_connections=50"),
+            "{joined}"
+        );
+    }
+
+    #[test]
+    fn create_args_match_run_args_without_the_run_preamble() {
+        let p = proj();
+        let svc = p.manifest.service("db").unwrap();
+        let run = run_args(&p, svc, "demo-db");
+        let create = create_args(&p, svc, "demo-db");
+        assert_eq!(create[0], "create");
+        assert_eq!(&run[4..], &create[1..]);
+    }
+
+    #[test]
+    fn resource_args_can_drop_ports_and_volumes() {
+        let p = proj();
+        let svc = p.manifest.service("db").unwrap();
+        let no_ports = resource_args(&p, svc, "demo-db-run-1", false, true).join(" ");
+        assert!(!no_ports.contains("--publish"), "{no_ports}");
+        assert!(no_ports.contains("--volume"), "{no_ports}");
+        let bare = resource_args(&p, svc, "demo-db-run-1", false, false).join(" ");
+        assert!(!bare.contains("--volume"), "{bare}");
+        assert!(bare.contains("--env POSTGRES_USER=user"), "{bare}");
+    }
 }
