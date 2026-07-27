@@ -121,7 +121,7 @@ _ensure_volumes() {
     [ -n "$vol" ] || continue
     full=$(svc_volume_name "$proj" "$vol")
     if ! container volume ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qxF -- "$full"; then
-      container volume create "$full" >/dev/null 2>&1 && dim "  volume $full created"
+      run_cmd container volume create "$full" >/dev/null 2>&1 && dim "  volume $full created"
     fi
   done
 }
@@ -169,9 +169,22 @@ start_service() {
     ok "$cname already running"
     return 0
   fi
+  # A stopped container still has its filesystem: restart it in place rather
+  # than recreating, unless --recreate was asked for or the config changed.
   if [ "$state" = "stopped" ] || [ "$state" = "exited" ]; then
-    dim "  removing stale $cname"
-    container rm "$cname" >/dev/null 2>&1
+    if [ -n "${AC_F_RECREATE:-}" ]; then
+      dim "  recreating $cname"
+      run_cmd container rm "$cname" >/dev/null 2>&1
+    else
+      info "restarting $cname"
+      if run_cmd container start "$cname" >/dev/null 2>&1; then
+        _wait_ready "$cname" "$svc_json"
+        ok "$cname up  $(dim "$(container_ip "$cname")")"
+        return 0
+      fi
+      dim "  restart failed, recreating"
+      run_cmd container rm "$cname" >/dev/null 2>&1
+    fi
   fi
 
   _ensure_volumes "$proj" "$svc_json"
@@ -204,7 +217,7 @@ start_service() {
   done < <(printf '%s' "$svc_json" | jq -r '(.args // [])[]')
 
   info "starting $cname"
-  if ! container "${args[@]}" >/dev/null; then
+  if ! run_cmd container "${args[@]}" >/dev/null; then
     # `container run` sometimes reports a spurious "not found" while the
     # container is in fact created and running, so trust observed state over
     # the exit code before giving up.
@@ -227,7 +240,10 @@ project_start() {
   targets=$(proj_target_services "$proj" "$@") || exit 1
 
   daemon_ensure
-  project_login "$proj"
+  # Only the images we are about to pull can justify a registry login.
+  local svc_images
+  svc_images=$(proj_json "$proj" | jq -r '.services[].image' | tr '\n' ' ')
+  project_login "$proj" "" $svc_images
   printf '%s\n' "$targets" | while IFS= read -r svc; do
     [ -n "$svc" ] && start_service "$proj" "$svc"
   done
@@ -240,7 +256,9 @@ project_pull() {
   local targets svc img
   targets=$(proj_target_services "$proj" "$@") || exit 1
   daemon_ensure
-  project_login "$proj"
+  local svc_images
+  svc_images=$(proj_json "$proj" | jq -r '.services[].image' | tr '\n' ' ')
+  project_login "$proj" "" $svc_images
   printf '%s\n' "$targets" | while IFS= read -r svc; do
     [ -n "$svc" ] || continue
     img=$(proj_service_json "$proj" "$svc" | jq -r '.image')
@@ -253,20 +271,41 @@ project_pull() {
 # are pulled. Credentials are never stored in the manifest: `passwordCmd` is an
 # argv that is executed and piped to --password-stdin, which suits tokens that
 # expire (AWS ECR tokens last 12 hours, so this re-runs on every start).
+# Log in to the project's private registries.
+#
+# Any images passed as extra arguments act as a filter: a registry is only
+# contacted when one of those images actually comes from it. That keeps
+# `ac <proj> start` from trying to authenticate to ECR just to pull
+# postgres from docker.io. With no images given (an explicit `ac <proj>
+# login`) every declared registry is used.
 project_login() {
-  local proj="$1"
+  local proj="$1" profile="${2:-}"; shift 2 2>/dev/null || shift $#
+  local images="$*"
   local n; n=$(proj_json "$proj" | jq '(.registries // []) | length')
   [ "$n" -gt 0 ] || return 0
 
   local i=0 server user tmp a
   while [ "$i" -lt "$n" ]; do
-    server=$(proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].server')
+    server=$(build_interpolate "$proj" "$profile" \
+      "$(proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].server')")
     user=$(proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].username // "AWS"')
+
+    # Skip registries nothing is being pulled from, and skip malformed ones
+    # (an uninterpolated {{account}} leaves a leading dot).
+    case "$server" in ""|.*|*"{{"*) i=$((i + 1)); continue ;; esac
+    if [ -n "$images" ]; then
+      case "$images" in
+        *"$server"*) ;;
+        *) i=$((i + 1)); continue ;;
+      esac
+    fi
 
     tmp=$(mktemp)
     proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].passwordCmd[]' > "$tmp"
     local argv=()
-    while IFS= read -r a; do argv+=("$a"); done < "$tmp"
+    while IFS= read -r a; do
+      argv+=("$(build_interpolate "$proj" "$profile" "$a")")
+    done < "$tmp"
     rm -f "$tmp"
 
     info "logging in to $server"
@@ -317,7 +356,31 @@ project_images() {
 
 # ------------------------------------------------------------------- stop ---
 
+# Stop containers WITHOUT removing them. The container keeps its filesystem and
+# can be restarted in place, which is both faster and non-destructive. Use
+# `down` when you actually want them gone.
 project_stop() {
+  local proj="$1"; shift
+  local targets svc cname state
+  targets=$(proj_target_services "$proj" "$@") || exit 1
+
+  printf '%s\n' "$targets" | while IFS= read -r svc; do
+    [ -n "$svc" ] || continue
+    cname=$(svc_container_name "$proj" "$svc")
+    state=$(container_state "$cname")
+    case "$state" in
+      absent)  dim "  $cname not created" ;;
+      running) info "stopping $cname"; run_cmd container stop "$cname" >/dev/null 2>&1
+               ok "$cname stopped" ;;
+      *)       dim "  $cname already $state" ;;
+    esac
+  done
+
+  supervisor_settle
+}
+
+# Stop AND remove the containers. Named volumes are untouched, so data survives.
+project_down() {
   local proj="$1"; shift
   local targets svc cname state
   targets=$(proj_target_services "$proj" "$@") || exit 1
@@ -329,14 +392,12 @@ project_stop() {
     [ "$state" = "absent" ] && continue
     if [ "$state" = "running" ]; then
       info "stopping $cname"
-      container stop "$cname" >/dev/null 2>&1
+      run_cmd container stop "$cname" >/dev/null 2>&1
     fi
-    container rm "$cname" >/dev/null 2>&1
+    run_cmd container rm "$cname" >/dev/null 2>&1
     ok "$cname removed"
   done
 
-  # Hand the daemon question to the shared policy: it is only stopped when
-  # nothing else ac manages is still alive, and only if ac owns it.
   supervisor_settle
 }
 
@@ -344,6 +405,11 @@ project_stop() {
 
 project_status() {
   local proj="$1" svc cname state ip ports
+  # Without a running daemon nothing can be queried, and every container would
+  # be reported as "absent", which is a lie: they are merely unreachable.
+  if ! daemon_running; then
+    warn "container daemon is not running - state unknown (run: ac $proj start)"
+  fi
   printf '%s%-22s %-10s %-18s %s%s\n' "$C_BOLD" "CONTAINER" "STATE" "IP" "PORTS" "$C_RESET"
   proj_services "$proj" | while IFS= read -r svc; do
     [ -n "$svc" ] || continue

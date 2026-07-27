@@ -43,6 +43,15 @@ require() {
   command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
+# Run a command after echoing it verbatim. Every underlying `container`
+# invocation goes through this, so any step can be copied and re-run by hand,
+# and an agent reading the output can see exactly what was executed.
+# Set AC_QUIET=1 to suppress the echo.
+run_cmd() {
+  [ -n "${AC_QUIET:-}" ] || printf '%s   $ %s%s\n' "$C_DIM" "$*" "$C_RESET" >&2
+  "$@"
+}
+
 # ----------------------------------------------------------------- config ---
 
 # Seed a config file on first run. If the daemon happens to be running we adopt
