@@ -11,7 +11,8 @@
       "env": {
         "POSTGRES_USER": "user",
         "POSTGRES_PASSWORD": "pass",
-        "POSTGRES_DB": "postgres"
+        "POSTGRES_DB": "postgres",
+        "PGDATA": "/var/lib/postgresql/data/pgdata"
       },
       "volumes": [
         { "name": "postgres-data", "target": "/var/lib/postgresql/data" }

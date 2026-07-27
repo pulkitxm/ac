@@ -1,4 +1,4 @@
-# ac — Apple Container project runner
+# ac
 
 A small CLI for running project-scoped service stacks on Apple's
 [`container`](https://github.com/apple/container), filling the gap left by the
@@ -20,12 +20,12 @@ This is the part worth understanding, because it is the whole point of the tool.
 
 | Situation on `ac <project> start` | What `ac` does |
 | --- | --- |
-| Daemon **already running** | Uses it. Never starts, restarts or stops it — including on `ac <project> stop`. |
+| Daemon **already running** | Uses it. Never starts, restarts or stops it, including on `ac <project> stop`. |
 | Daemon **not running** | Starts it, records ownership in `~/.local/state/ac/daemon.owned`, and spawns a supervisor. |
 
 When `ac` owns the daemon, a detached supervisor process polls for running
-containers. Once the last `ac`-managed container disappears — whether you ran
-`ac <project> stop`, the containers exited on their own, or they crashed — the
+containers. Once the last `ac`-managed container disappears (whether you ran
+`ac <project> stop`, the containers exited on their own, or they crashed), the
 supervisor stops the daemon and exits.
 
 Ownership lives in a file rather than in memory, so a second `ac` invocation
@@ -66,7 +66,7 @@ ac <project> ip [service]
 ac ls                        list projects
 ac status                    daemon + supervisor + every project
 ac daemon status             who owns the daemon right now
-ac daemon stop               stop it — only if ac started it
+ac daemon stop               stop it, only if ac started it
 ac config                    resolved configuration
 ```
 
@@ -101,7 +101,7 @@ private. User projects shadow repo ones with the same name.
 | --- | --- |
 | `image` | Full OCI reference. Include the registry (`docker.io/library/...`). |
 | `cpus`, `memory` | Sizes the container's **VM**, not a cgroup. Each container is its own VM. |
-| `ports` | `host:container`, same as Docker. Optional — every container also gets its own routable IP. |
+| `ports` | `host:container`, same as Docker. Optional, since every container also gets its own routable IP. |
 | `env` | Key/value map. |
 | `volumes` | Named volumes; the real volume is `<project>-<name>`, created on demand. |
 | `readyCmd` | Polled via `container exec` until it exits 0. Apple `container` has no healthcheck primitive, so readiness is implemented here. |
@@ -125,17 +125,28 @@ its own containers when deciding whether the daemon can be shut down.
 }
 ```
 
-- `appRoot` — passed as `--app-root` when `ac` starts the daemon. Seeded from
+- `appRoot`: passed as `--app-root` when `ac` starts the daemon. Seeded from
   the running daemon on first run so `ac` keeps using your existing image store.
-- `sparseBundle` / `imageMount` — if set and not mounted, the bundle is attached
+- `sparseBundle` / `imageMount`: if set and not mounted, the bundle is attached
   with `hdiutil attach -owners on` before the daemon starts. This is needed when
   the app root lives on a volume mounted `noowners`, which otherwise makes
   `container-apiserver` abort with `XPC connection error: Connection invalid`.
 
 ## Notes on Apple Container
 
-- One lightweight VM **per container**, each with its own kernel — so `memory`
+- One lightweight VM **per container**, each with its own kernel, so `memory`
   is VM sizing, and container counts cost real RAM.
 - Every container gets a routable IP (`192.168.64.x`). You can reach it directly
   without publishing ports; `ac <project> ip` prints them.
-- ICMP is blocked host→container, so `ping` fails even when TCP works.
+- ICMP is blocked host to container, so `ping` fails even when TCP works.
+- Named volumes are real ext4 block devices, not host directories, so every
+  fresh volume contains a `lost+found`. Anything that insists on an empty
+  directory will refuse to start. Postgres is the common case, which is why the
+  novasynth manifest sets `PGDATA` to a subdirectory of the mount point:
+
+  ```
+  initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
+  initdb: detail: It contains a lost+found directory
+  ```
+
+  This does not happen on Docker, where named volumes are plain directories.

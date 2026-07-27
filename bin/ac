@@ -8,7 +8,23 @@
 
 set -uo pipefail
 
-AC_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Resolve through symlinks: install.sh links this into ~/.local/bin, so
+# BASH_SOURCE points at the link, not the repo. macOS has no portable
+# `readlink -f`, hence the manual walk.
+_ac_script_dir() {
+  local src="$1" dir
+  while [ -L "$src" ]; do
+    dir=$(cd -P "$(dirname "$src")" && pwd)
+    src=$(readlink "$src")
+    case "$src" in
+      /*) ;;
+      *) src="$dir/$src" ;;
+    esac
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+
+AC_HOME="$(cd "$(_ac_script_dir "${BASH_SOURCE[0]}")/.." && pwd)"
 export AC_HOME
 
 . "$AC_HOME/lib/common.sh"
@@ -108,7 +124,11 @@ main() {
     exec)
       [ $# -ge 2 ] || die "usage: ac $proj exec <service> <command...>"
       local svc="$1"; shift
-      container exec -i -t "$(svc_container_name "$proj" "$svc")" "$@"
+      # Only request a TTY when we actually have one, otherwise the runtime
+      # rejects the exec with ENODEV (e.g. in scripts and CI).
+      local tty_flags=(-i)
+      [ -t 0 ] && [ -t 1 ] && tty_flags=(-i -t)
+      container exec "${tty_flags[@]}" "$(svc_container_name "$proj" "$svc")" "$@"
       ;;
     ip)
       if [ $# -ge 1 ]; then
