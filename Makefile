@@ -42,7 +42,7 @@ lint: ## Run clippy over all targets, warnings are errors
 fmt: ## Format the source in place
 	'$(CARGO)' fmt
 
-install: build completions ## Build, then link the binary into BIN_DIR
+install: build ## Build, then link the binary into BIN_DIR
 	@mkdir -p '$(BIN_DIR)'
 	@ln -sf '$(CURDIR)/target/release/ac' '$(BIN_DIR)/$(BIN_NAME)'
 	@echo 'linked $(BIN_DIR)/$(BIN_NAME) -> $(CURDIR)/target/release/ac'
@@ -55,12 +55,16 @@ install: build completions ## Build, then link the binary into BIN_DIR
 	@echo 'For bash, source the completion directly:'
 	@echo '  source "$(CURDIR)/$(COMPLETION_DIR)/ac.bash"'
 
-completions: build ## Generate zsh, bash and fish completions into $(COMPLETION_DIR)
-	@mkdir -p '$(COMPLETION_DIR)'
-	@./target/release/ac completions zsh  > '$(COMPLETION_DIR)/_ac'
-	@./target/release/ac completions bash > '$(COMPLETION_DIR)/ac.bash'
-	@./target/release/ac completions fish > '$(COMPLETION_DIR)/ac.fish'
-	@echo 'wrote $(COMPLETION_DIR)/{_ac,ac.bash,ac.fish}'
+completions: build ## Print the shell hook to source (dynamic, always in sync)
+	@echo '# add to ~/.zshrc:'
+	@echo 'source <(COMPLETE=zsh ac)'
+	@echo
+	@echo '# bash, in ~/.bashrc:'
+	@echo 'source <(COMPLETE=bash ac)'
+
+
+test-completions: build ## Verify shell completion for every command, flag and value
+	@./tests/completions.sh
 
 e2e: build ## Run the integration tests against real containers
 	@./tests/e2e.sh
