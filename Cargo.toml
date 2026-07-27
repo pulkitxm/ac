@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
-clap_complete = "4"
+clap_complete = { version = "4", features = ["unstable-dynamic"] }
 ctrlc = "3"
 indicatif = "0.17"
 owo-colors = { version = "4", features = ["supports-colors"] }
