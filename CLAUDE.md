@@ -258,8 +258,14 @@ hatch `ac -p <project> <action>`.
 
 | Command | What it runs underneath |
 | --- | --- |
-| `start [svc...]` | Ensures the daemon, logs in to registries the images come from, creates missing volumes, then `container start` for an existing stopped container or `container run -d` otherwise. Waits on `readyCmd`. |
+| `start [svc...]` (alias `up`) | Ensures the daemon, logs in to registries the images come from, creates missing volumes, then `container start` for an existing stopped or created container or `container run -d` otherwise. Waits on `readyCmd`. Accepts and ignores `-d`. |
 | `start --recreate` | `container rm` then `container run -d`. Volumes and their data survive. |
+| `run [--keep] [-e K=V] [--no-volumes] <svc> [cmd...]` | One-off container from the service definition, named `<project>-<svc>-run-<timestamp>`, interactive when on a TTY, `--rm` unless `--keep`. Published ports are not bound, so it never conflicts with the running service. |
+| `create [--recreate] [svc...]` | `container create` with exactly the argv `start` would use, so a later `start` starts it in place. |
+| `top [svc...]` | `ps aux` (fallback `ps`) through `container exec` per running service. |
+| `wait [--timeout N] [svc...]` | Polls `readyCmd` (or the running state when there is none) and exits non-zero on timeout, so scripts can gate on readiness. |
+| `push [-P profile] [name...]` | Pushes the tags `build` would produce, without building. Logs in first, filtered to the registries involved. postPush hooks do not run. |
+| `export <svc> [-o file]` | `container export`. Apple container refuses on a running container, so `ac` checks and says to stop it first. Default output `<project>-<svc>.tar`. |
 | `stop [svc...]` | `container stop`. Containers are **kept**, so `start` brings them back in place. Then the cross-project daemon refcount check. |
 | `down [svc...]` | `container stop` then `container rm`. Named volumes and data survive. Then the refcount check. |
 | `restart [svc...]` | `stop` then `start`, without releasing the daemon in between. |
@@ -287,15 +293,26 @@ hatch `ac -p <project> <action>`.
 | --- | --- |
 | `ac ls`, `ac projects` | List discoverable projects. |
 | `ac status` | Daemon, supervisor, and every project. |
+| `ac ps [-a]` | `container ls` across everything. `--json` joins against the manifests: `[{container, project, service, state, ip, image}]`. |
+| `ac image <ls\|pull\|push\|rm\|tag\|inspect\|prune\|save\|load>` | The local image store, docker image style. `ac images` still works as an alias for `ac image ls`. |
+| `ac volume <ls\|create\|rm\|inspect\|prune>` | Volumes across the whole daemon. Per-project volumes stay under `ac <project> volumes`. |
+| `ac network <ls\|create\|rm\|inspect\|prune>` | Networks. Non-default networks need macOS 26. |
+| `ac system <info\|df\|start\|stop\|prune\|logs>` | Daemon lifecycle and disk usage. `start`/`stop` follow the ownership contract; `stop` refuses to touch an external daemon. |
+| `ac registry <login\|logout\|ls>` | Registry logins outside any project. |
 | `ac daemon status` | Daemon state and who owns it. |
 | `ac daemon stop` | Stop the daemon, **only** if ac started it. |
-| `ac images` | `container image ls` |
-| `ac df` | `container system df` |
-| `ac prune` | `container prune` then `container image prune`, then the refcount check. |
+| `ac df`, `ac prune` | Route through the `system` group; same behaviour as before. |
 | `ac config` | Resolved `~/.config/ac/config.json`. |
 | `ac schema` | The manifest JSON Schema. |
+| `ac guide [claude]` | The embedded manual (`docs/guide.md`). `claude` prints `docs/claude-snippet.md`, a drop-in block for another repo's CLAUDE.md. |
 | `ac completions <shell>` | zsh, bash, fish, elvish or powershell. |
 | `ac version`, `ac help` | |
+
+Global reads (`ps`, `image ls`, `df`, ...) **require** a running daemon and
+fail with a hint instead of starting one, because a daemon started for a read
+would be silently owned with no supervisor. Mutating globals (`image pull`,
+`registry login`, `prune`, ...) ensure the daemon and run the refcount check
+afterwards, so a daemon started for a one-off command is released again.
 
 ### Agent facing behaviour
 
@@ -329,9 +346,18 @@ Flags: `-P/--profile`, `--root`, `--platform`, `--push` / `--no-push`,
 `--no-cache`, `--progress <auto|plain|tty>`, `--target`, `--builder-cpus`,
 `--builder-memory`, `--sequential`.
 
-Multiple builds run in parallel by default, one `indicatif` spinner each, every
-child line prefixed with the build name. `--sequential` instead inherits stdio
-so buildkit renders its own progress.
+Multiple builds run in parallel by default. On a TTY each build renders one
+live line driven by `src/progress.rs`, which parses the buildkit plain stream
+(`ac` forces `--progress plain` underneath): step position `[i/n]`, the
+instruction, per-step elapsed and total elapsed, refreshed on a 100ms ticker.
+Finished steps print as compact `+`/`-` lines, the last 200 raw lines are kept
+per build and replayed on failure, and every build run ends with a summary
+table, or a JSON array under `--json` (`{build, ok, seconds, steps, tags,
+pushed, error}`). `--progress plain` streams raw prefixed lines instead (also
+the non-TTY and `--json` behaviour), and `--progress tty --sequential`
+inherits stdio so buildkit renders its own display.
+
+`ac <project> push` reuses the same tag resolution to push without building.
 
 Registry login is **filtered**: a registry is contacted only when an image
 actually comes from it. That is what stops `ac shop start` logging in to ECR
@@ -454,6 +480,18 @@ grep -nE '^\s*#' Makefile tests/e2e.sh | grep -v '#!' # expect no output
 
 The bash implementation in `bin/` and `lib/` predates this rule and is left as
 it is; it is the reference spec, not active development.
+
+## Docs that ship inside the binary
+
+`docs/guide.md` and `docs/claude-snippet.md` are embedded with `include_str!`
+and printed by `ac guide` / `ac guide claude`. Editing them changes user-facing
+output, so treat them as part of the CLI surface. The guide is the
+self-teaching entry point for agents; keep the docker-to-ac table in it
+complete when adding commands.
+
+`extras/` is a gitignored playground (an Express app with a multi-stage
+Dockerfile) used by the e2e suite and for manually exercising builds; recreate
+it from `tests/e2e.sh` if it is missing.
 
 ## Testing
 

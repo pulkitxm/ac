@@ -160,6 +160,21 @@ pub enum TopCommand {
     /// Example: ac schema > manifest.schema.json
     Schema,
 
+    /// Print the built-in manual, written for agents and humans alike.
+    ///
+    /// With no topic this is the full guide: a docker-to-ac command table,
+    /// the daemon ownership rules, build behaviour and manifest authoring.
+    /// `ac guide claude` prints a concise snippet to paste into another
+    /// repository's CLAUDE.md so agents working there drive ac correctly.
+    ///
+    /// Examples:
+    ///   ac guide
+    ///   ac guide claude >> ../my-app/CLAUDE.md
+    Guide {
+        /// What to print. Omit for the full manual.
+        topic: Option<GuideTopic>,
+    },
+
     /// Generate a shell completion script.
     ///
     /// Example: ac completions zsh > ~/.zsh/completions/_ac
@@ -202,6 +217,12 @@ pub enum DaemonAction {
     /// Kills the supervisor first, then runs `container system stop`. Does
     /// nothing when the daemon was already running before ac was involved.
     Stop,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum GuideTopic {
+    /// A concise CLAUDE.md snippet for making another repo ac-aware.
+    Claude,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
