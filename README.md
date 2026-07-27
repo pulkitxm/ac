@@ -60,35 +60,49 @@ one container. Services can be named either bare (`redis`) or by container name
 (`shop-redis`), since the latter is what `ac shop ls` prints.
 
 ```
-ac <project> start [svc...]        start services
-ac <project> stop [svc...]         stop and remove services
+ac <project> start | up [svc...]   start services (up is an alias)
+ac <project> stop [svc...]         stop services, containers kept in place
+ac <project> down [svc...]         stop and remove; named volumes survive
 ac <project> restart [svc...]      stop then start
 ac <project> ls | ps | status      per-service state, IP, published ports
 ac <project> logs [-f] [-n N] [svc]  logs; no service means all, interleaved
+ac <project> run [--keep] <svc> [cmd...]  one-off container from the service
+ac <project> create [svc...]       create containers without starting them
 ac <project> exec <svc> <cmd...>   run a command in a service
 ac <project> sh [svc]              interactive shell (bash if present, else sh)
+ac <project> top [svc...]          processes inside each running service
+ac <project> wait [--timeout N]    block until ready; exit code says so
 ac <project> stats [svc...]        live resource usage
 ac <project> inspect [svc...]      full container JSON
 ac <project> kill [-s SIG] [svc..] send a signal, default KILL
 ac <project> rm [svc...]           force remove containers, keeping volumes
 ac <project> cp <src> <dst>        copy files; svc:/path for the container side
 ac <project> pull [svc...]         pre-pull images
-ac <project> images                images this project uses
-ac <project> port [svc]            published port mappings
-ac <project> ip [svc]              container IPs
-ac <project> env <svc>             environment from the manifest
+ac <project> build [name...]       build images, live per-step progress
+ac <project> push [-P profile]     push already-built tags, no rebuild
+ac <project> export <svc> [-o f]   stopped service's filesystem as a tar
+ac <project> images | volumes      what the project declares, and its state
+ac <project> port | ip | env       mappings, addresses, environment
 ac <project> login                 authenticate to private registries
 ac <project> config                the project manifest
 
 ac ls                              list projects
 ac status                          daemon + supervisor + every project
-ac daemon status                   who owns the daemon right now
-ac daemon stop                     stop it, only if ac started it
-ac images                          every image in the local store
-ac df                              disk usage
-ac prune                           remove stopped containers, unused images
-ac config                          resolved configuration
+ac ps [-a]                         containers across every project
+ac image ls|pull|push|rm|tag|inspect|prune|save|load
+ac volume ls|create|rm|inspect|prune
+ac network ls|create|rm|inspect|prune
+ac system info|df|start|stop|prune|logs
+ac registry login|logout|ls
+ac daemon status | stop            who owns the daemon; stop only if ac's
+ac guide [claude]                  built-in manual; claude prints a CLAUDE.md snippet
+ac config | schema                 resolved configuration; manifest schema
 ```
+
+Global noun groups mirror docker: `ac ps`, `ac image ls`, `ac volume prune`
+and friends map straight onto the underlying `container` commands, with
+`--json` on every read. `ac system start`/`stop` respect the ownership rule:
+ac never stops a daemon it did not start.
 
 `ac <project> logs -f` with no service follows every container at once, each
 line prefixed and coloured by service, the way `docker compose logs -f` does.
@@ -97,6 +111,38 @@ Apple `container logs` only handles one container, so the fan-out happens in
 
 Tab completion covers projects, actions, service names (both forms), flags and
 signal names, in zsh and bash.
+
+## Builds
+
+`ac <project> build` runs every build in the manifest in parallel. On a TTY
+each build renders a single live line: current step position, the instruction
+being run, per-step elapsed and total elapsed, all ticking in real time.
+Finished steps print compactly as they complete, cached steps are marked, and
+a failing build replays its last output lines so the cause is on screen.
+
+```
+⠸ web  [9/14] RUN pnpm install --frozen-lockfile  41.2s | total 1m03s
+   + [web] [8/14] COPY package.json pnpm-lock.yaml ./  0.1s
+   - [web] [7/14] WORKDIR /app  cached
+```
+
+`--progress plain` streams raw buildkit lines instead, `--sequential` builds
+one image at a time, `--dry-run` prints the resolved plan without touching
+anything, and `--json` emits a machine-readable summary per build. Every
+setting resolves CLI flag > profile > build entry > project default.
+
+## Agents
+
+The CLI is written to be driven by coding agents as much as by people:
+
+- `--json` on every read command puts one parseable document on stdout and
+  moves human chatter to stderr.
+- `ac guide` prints a complete manual, including a docker-to-ac table, so an
+  agent can teach itself the tool at runtime. `ac guide claude` emits a short
+  snippet to paste into another repository's CLAUDE.md.
+- Every underlying `container` command is echoed to stderr before it runs, so
+  any step can be copied and re-run by hand.
+- `ac <project> wait` turns readiness into an exit code to gate on.
 
 ## Private registries (AWS ECR, GHCR, and friends)
 
