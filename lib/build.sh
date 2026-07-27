@@ -14,7 +14,7 @@
 
 # Overrides set by bin/ac from CLI flags; empty means "not given".
 AC_F_PLATFORM=""; AC_F_PUSH=""; AC_F_NOCACHE=""
-AC_F_BCPUS=""; AC_F_BMEM=""; AC_F_TARGET=""; AC_F_SEQUENTIAL=""; AC_F_ROOT=""
+AC_F_BCPUS=""; AC_F_BMEM=""; AC_F_TARGET=""; AC_F_SEQUENTIAL=""; AC_F_ROOT=""; AC_F_PROGRESS=""
 
 # Resolve the directory builds run from. Order, highest priority first:
 #
@@ -226,6 +226,7 @@ build_one() {
   [ ${#tags[@]} -gt 0 ] || die "build '$name' declares no tags"
 
   local args=(build --platform "$platform" -f "$dockerfile")
+  [ -n "$AC_F_PROGRESS" ] && args+=(--progress "$AC_F_PROGRESS")
   [ -n "$target" ] && args+=(--target "$target")
   [ -n "$AC_F_NOCACHE" ] || [ -n "${NO_CACHE:-}" ] && args+=(--no-cache)
 
