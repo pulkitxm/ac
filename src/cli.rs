@@ -352,7 +352,9 @@ pub enum Action {
         /// Extra KEY=VALUE environment entries, overriding the manifest.
         #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
         env: Vec<String>,
-        /// Do not attach the service's named volumes.
+        /// Do not attach the service's named volumes. Use this when the
+        /// long-running service is up: a named volume is a block device and
+        /// cannot be attached to two containers at once.
         #[arg(long)]
         no_volumes: bool,
         /// Service whose definition to run.
