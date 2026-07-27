@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::ctx::{now_stamp, Ctx, Runner};
 use crate::manifest::{json_scalar, Build, Project};
+use crate::progress::{fmt_secs, StepFinished, Tracker};
 use crate::style;
 use crate::{daemon, project};
 
@@ -288,24 +290,55 @@ first and its layer cache is discarded.",
     thread::sleep(Duration::from_secs(2));
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Fancy,
+    Stream,
+    Inherit,
+}
+
+fn output_mode(ctx: &Ctx, ov: &BuildOverrides, count: usize) -> Mode {
+    match ov.progress.as_deref() {
+        Some("plain") => Mode::Stream,
+        Some("tty") if count == 1 || ov.sequential => Mode::Inherit,
+        _ => {
+            if ctx.color {
+                Mode::Fancy
+            } else {
+                Mode::Stream
+            }
+        }
+    }
+}
+
 struct Reporter<'a> {
     ctx: &'a Ctx,
     name: String,
+    mode: Mode,
     multi: Option<&'a MultiProgress>,
     bar: Option<ProgressBar>,
+    tracker: Arc<Mutex<Tracker>>,
 }
 
 impl<'a> Reporter<'a> {
-    fn plain(ctx: &'a Ctx, name: &str) -> Self {
+    fn new(
+        ctx: &'a Ctx,
+        name: &str,
+        mode: Mode,
+        multi: Option<&'a MultiProgress>,
+        bar: Option<ProgressBar>,
+    ) -> Self {
         Reporter {
             ctx,
             name: name.to_string(),
-            multi: None,
-            bar: None,
+            mode,
+            multi,
+            bar,
+            tracker: Arc::new(Mutex::new(Tracker::new())),
         }
     }
 
-    fn emit(&self, line: String) {
+    fn println(&self, line: String) {
         match self.multi {
             Some(multi) => {
                 multi.println(line).ok();
@@ -315,24 +348,89 @@ impl<'a> Reporter<'a> {
     }
 
     fn info(&self, msg: &str) {
-        self.emit(format!("{} [{}] {msg}", style::blue("==>"), self.name));
+        self.println(format!("{} [{}] {msg}", style::blue("==>"), self.name));
     }
+
     fn ok(&self, msg: &str) {
-        self.emit(format!("{} [{}] {msg}", style::green("  ok"), self.name));
+        self.println(format!("{} [{}] {msg}", style::green("  ok"), self.name));
     }
+
     fn dim(&self, msg: &str) {
-        self.emit(style::dim(&format!("  [{}] {msg}", self.name)));
+        self.println(style::dim(&format!("  [{}] {msg}", self.name)));
     }
-    fn tick(&self, msg: &str) {
-        if let Some(bar) = &self.bar {
-            bar.set_message(msg.to_string());
+
+    fn phase(&self, phase: &str) {
+        if let Ok(mut t) = self.tracker.lock() {
+            t.set_phase(phase);
+        }
+    }
+
+    fn step_line(&self, fin: &StepFinished) {
+        let pos = fin.position();
+        let line = if let Some(err) = &fin.error {
+            format!(
+                "{} [{}] {pos}{}  {}",
+                style::red("   x"),
+                self.name,
+                fin.label,
+                err
+            )
+        } else if fin.cached {
+            style::dim(&format!("   - [{}] {pos}{}  cached", self.name, fin.label))
+        } else {
+            format!(
+                "{} [{}] {pos}{}  {}",
+                style::green("   +"),
+                self.name,
+                fin.label,
+                fin.secs.map(fmt_secs).unwrap_or_default()
+            )
+        };
+        self.println(line);
+    }
+
+    fn observe(&self, line: &str) {
+        let fin = self.tracker.lock().ok().and_then(|mut t| t.observe(line));
+        match self.mode {
+            Mode::Fancy => {
+                if let Some(fin) = &fin {
+                    if fin.index.is_some() || fin.error.is_some() {
+                        self.step_line(fin);
+                    }
+                }
+            }
+            Mode::Stream | Mode::Inherit => {
+                self.println(format!(
+                    "{} {line}",
+                    style::dim(&format!("{:>12} |", self.name))
+                ));
+            }
+        }
+    }
+
+    fn dump_tail(&self, lines: usize) {
+        let Ok(t) = self.tracker.lock() else {
+            return;
+        };
+        let tail = t.tail();
+        let start = tail.len().saturating_sub(lines);
+        if start >= tail.len() {
+            return;
+        }
+        self.println(style::dim(&format!(
+            "  [{}] last {} output lines:",
+            self.name,
+            tail.len() - start
+        )));
+        for l in &tail[start..] {
+            self.println(style::dim(&format!("  [{}] {l}", self.name)));
         }
     }
 
     fn run(&self, runner: Runner<'_>) -> Result<bool> {
-        let Some(multi) = self.multi else {
+        if self.mode == Mode::Inherit {
             return Ok(runner.status()?.success());
-        };
+        }
 
         let mut child = runner.spawn_piped()?;
         let (tx, rx) = mpsc::channel::<String>();
@@ -356,13 +454,7 @@ impl<'a> Reporter<'a> {
         drop(tx);
 
         for line in rx {
-            self.tick(&line);
-            multi
-                .println(format!(
-                    "{} {line}",
-                    style::dim(&format!("{:>12} |", self.name))
-                ))
-                .ok();
+            self.observe(&line);
         }
         for r in readers {
             r.join().ok();
@@ -371,20 +463,37 @@ impl<'a> Reporter<'a> {
     }
 }
 
-fn run_hooks(
-    rep: &Reporter,
-    root: &Path,
-    key: &str,
-    hooks: &[Vec<String>],
-    v: &Vars,
-) -> Result<()> {
+fn spawn_ticker(reporters: &[&Reporter<'_>]) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let pairs: Vec<(Arc<Mutex<Tracker>>, ProgressBar)> = reporters
+        .iter()
+        .filter_map(|r| r.bar.clone().map(|b| (r.tracker.clone(), b)))
+        .collect();
+    let stop2 = stop.clone();
+    let handle = thread::spawn(move || {
+        while !stop2.load(Ordering::Relaxed) {
+            for (tracker, bar) in &pairs {
+                if bar.is_finished() {
+                    continue;
+                }
+                if let Ok(t) = tracker.lock() {
+                    bar.set_message(t.status_line());
+                }
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    });
+    (stop, handle)
+}
+
+fn run_hooks(rep: &Reporter, root: &Path, key: &str, hooks: &[Vec<String>], v: &Vars) -> Result<()> {
     for hook in hooks {
         if hook.is_empty() {
             continue;
         }
         let argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
         rep.dim(&format!("{key}: {}", argv.join(" ")));
-        rep.tick(&format!("{key}: {}", argv[0]));
+        rep.phase(&format!("{key}: {}", argv[0]));
         let runner = rep.ctx.exec(&argv[0], &argv[1..]).cwd(root);
         let ok = rep
             .run(runner)
@@ -403,7 +512,13 @@ struct Plan {
     push: bool,
 }
 
-fn plan_build(proj: &Project, b: &Build, ov: &BuildOverrides, v: &Vars) -> Result<Plan> {
+fn plan_build(
+    proj: &Project,
+    b: &Build,
+    ov: &BuildOverrides,
+    v: &Vars,
+    progress: Option<&str>,
+) -> Result<Plan> {
     let platform = ov
         .platform
         .clone()
@@ -437,9 +552,9 @@ fn plan_build(proj: &Project, b: &Build, ov: &BuildOverrides, v: &Vars) -> Resul
         "-f".into(),
         b.dockerfile.clone(),
     ];
-    if let Some(p) = &ov.progress {
+    if let Some(p) = progress {
         args.push("--progress".into());
-        args.push(p.clone());
+        args.push(p.to_string());
     }
     if let Some(t) = &target {
         args.push("--target".into());
@@ -513,6 +628,31 @@ fn builder_memory(proj: &Project, ov: &BuildOverrides) -> Option<String> {
     })
 }
 
+pub struct Outcome {
+    pub name: String,
+    pub ok: bool,
+    pub secs: f32,
+    pub steps_done: u32,
+    pub steps_cached: u32,
+    pub tags: Vec<String>,
+    pub pushed: bool,
+    pub error: Option<String>,
+}
+
+impl Outcome {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "build": self.name,
+            "ok": self.ok,
+            "seconds": (f64::from(self.secs) * 10.0).round() / 10.0,
+            "steps": { "done": self.steps_done, "cached": self.steps_cached },
+            "tags": self.tags,
+            "pushed": self.pushed,
+            "error": self.error,
+        })
+    }
+}
+
 fn build_one(
     rep: &Reporter,
     proj: &Project,
@@ -520,18 +660,20 @@ fn build_one(
     b: &Build,
     ov: &BuildOverrides,
     v: &Vars,
-) -> Result<()> {
-    let plan = plan_build(proj, b, ov, v)?;
+    progress: Option<&str>,
+) -> Result<(Vec<String>, bool)> {
+    let plan = plan_build(proj, b, ov, v, progress)?;
 
-    rep.info("preflight");
-    rep.tick("preflight");
+    rep.phase("preflight");
     run_hooks(rep, root, "preflight", &b.preflight, v)?;
 
-    rep.dim(&format!("root: {}", root.display()));
     rep.info(&format!("building {} -> {}", plan.platform, plan.tags[0]));
-    rep.tick("building");
+    rep.phase("resolving");
     let runner = rep.ctx.container(&plan.args).cwd(root);
     if !rep.run(runner)? {
+        if rep.mode == Mode::Fancy {
+            rep.dump_tail(40);
+        }
         return Err(anyhow!("[{}] build failed", rep.name));
     }
     rep.ok("built");
@@ -539,27 +681,22 @@ fn build_one(
     if plan.push {
         for t in &plan.tags {
             rep.info(&format!("pushing {t}"));
-            rep.tick(&format!("pushing {t}"));
+            rep.phase(&format!("pushing {t}"));
             let runner = rep.ctx.container(["image", "push", t.as_str()]);
             if !rep.run(runner)? {
                 return Err(anyhow!("[{}] push failed: {t}", rep.name));
             }
         }
         rep.ok("pushed");
-        rep.tick("postPush");
+        rep.phase("postPush");
         run_hooks(rep, root, "postPush", &b.post_push, v)?;
     } else {
         rep.dim(&format!("push disabled for profile '{}'", v.profile));
     }
-    Ok(())
+    Ok((plan.tags, plan.push))
 }
 
-pub fn project_build(
-    ctx: &Ctx,
-    proj: &Project,
-    names: &[String],
-    ov: &BuildOverrides,
-) -> Result<()> {
+pub fn project_build(ctx: &Ctx, proj: &Project, names: &[String], ov: &BuildOverrides) -> Result<()> {
     let profile = ov.profile_name();
     if proj.manifest.profiles.get(&profile).is_none() {
         return Err(anyhow!(
@@ -591,7 +728,7 @@ pub fn project_build(
             .iter()
             .filter_map(|t| proj.manifest.build(t))
             .filter_map(|b| {
-                plan_build(proj, b, ov, &vars_preview)
+                plan_build(proj, b, ov, &vars_preview, ov.progress.as_deref())
                     .ok()
                     .map(|plan| (b, plan))
             })
@@ -659,97 +796,246 @@ pub fn project_build(
         project::login(ctx, proj, &vars, &images).ok();
     }
 
-    if entries.len() > 1 && !ov.sequential {
+    let mode = output_mode(ctx, ov, entries.len());
+    let progress = match mode {
+        Mode::Fancy | Mode::Stream => Some("plain"),
+        Mode::Inherit => ov.progress.as_deref(),
+    };
+
+    let parallel = entries.len() > 1 && !ov.sequential && mode != Mode::Inherit;
+    if parallel {
         ctx.info(&format!(
             "building {} images in parallel (--sequential to disable)",
             entries.len()
         ));
-        run_parallel(ctx, proj, &root, &entries, ov, &vars)
-    } else {
-        let mut failures = Vec::new();
-        for b in &entries {
-            let rep = Reporter::plain(ctx, &b.name);
-            if let Err(e) = build_one(&rep, proj, &root, b, ov, &vars) {
-                ctx.err(&format!("{e}"));
-                failures.push(b.name.clone());
-            }
-        }
-        finish(ctx, failures)
     }
+
+    let outcomes = if mode == Mode::Fancy {
+        run_fancy(ctx, proj, &root, &entries, ov, &vars, progress, parallel)
+    } else {
+        run_basic(ctx, proj, &root, &entries, ov, &vars, progress, mode)
+    };
+
+    report(ctx, &outcomes)
 }
 
-fn run_parallel(
+#[allow(clippy::too_many_arguments)]
+fn run_fancy(
     ctx: &Ctx,
     proj: &Project,
     root: &Path,
     entries: &[Build],
     ov: &BuildOverrides,
     vars: &Vars,
-) -> Result<()> {
-    let multi = if ctx.color {
-        MultiProgress::new()
-    } else {
-        MultiProgress::with_draw_target(indicatif::ProgressDrawTarget::hidden())
-    };
-    let style = ProgressStyle::with_template("{spinner:.cyan} {prefix:12} {wide_msg}")
+    progress: Option<&str>,
+    parallel: bool,
+) -> Vec<Outcome> {
+    let multi = MultiProgress::new();
+    let bar_style = ProgressStyle::with_template("{spinner:.cyan} {prefix:>12} {wide_msg}")
         .unwrap_or_else(|_| ProgressStyle::default_spinner());
-    let multi_ref = &multi;
 
-    let failures: Vec<String> = thread::scope(|scope| {
-        let handles: Vec<_> = entries
-            .iter()
-            .map(|b| {
-                let bar = if ctx.color {
-                    let bar = multi_ref.add(ProgressBar::new_spinner());
-                    bar.set_style(style.clone());
-                    bar.set_prefix(b.name.clone());
-                    bar.set_message("starting");
-                    bar.enable_steady_tick(Duration::from_millis(120));
-                    Some(bar)
-                } else {
-                    None
-                };
-                scope.spawn(move || {
-                    let rep = Reporter {
-                        ctx,
-                        name: b.name.clone(),
-                        multi: Some(multi_ref),
-                        bar: bar.clone(),
-                    };
-                    let res = build_one(&rep, proj, root, b, ov, vars);
-                    if let Some(bar) = &bar {
-                        match &res {
-                            Ok(()) => bar.finish_with_message("done"),
-                            Err(_) => bar.finish_with_message("failed"),
-                        }
-                    }
-                    if let Err(e) = &res {
-                        ctx.err(&format!("{e}"));
-                    }
-                    (b.name.clone(), res.is_err())
+    let reporters: Vec<Reporter<'_>> = entries
+        .iter()
+        .map(|b| {
+            let bar = multi.add(ProgressBar::new_spinner());
+            bar.set_style(bar_style.clone());
+            bar.set_prefix(b.name.clone());
+            bar.set_message("starting");
+            bar.enable_steady_tick(Duration::from_millis(120));
+            Reporter::new(ctx, &b.name, Mode::Fancy, Some(&multi), Some(bar))
+        })
+        .collect();
+
+    let refs: Vec<&Reporter<'_>> = reporters.iter().collect();
+    let (stop, ticker) = spawn_ticker(&refs);
+
+    let run_one = |rep: &Reporter<'_>, b: &Build| -> Outcome {
+        let res = build_one(rep, proj, root, b, ov, vars, progress);
+        let (steps_done, steps_cached, secs) = rep
+            .tracker
+            .lock()
+            .map(|t| (t.steps_done, t.steps_cached, t.total_elapsed()))
+            .unwrap_or((0, 0, 0.0));
+        let outcome = match res {
+            Ok((tags, pushed)) => Outcome {
+                name: b.name.clone(),
+                ok: true,
+                secs,
+                steps_done,
+                steps_cached,
+                tags,
+                pushed,
+                error: None,
+            },
+            Err(e) => Outcome {
+                name: b.name.clone(),
+                ok: false,
+                secs,
+                steps_done,
+                steps_cached,
+                tags: Vec::new(),
+                pushed: false,
+                error: Some(e.to_string()),
+            },
+        };
+        if let Some(bar) = &rep.bar {
+            if outcome.ok {
+                bar.finish_with_message(format!(
+                    "done in {}  ({} steps, {} cached)",
+                    fmt_secs(outcome.secs),
+                    outcome.steps_done,
+                    outcome.steps_cached
+                ));
+            } else {
+                bar.finish_with_message(format!("failed after {}", fmt_secs(outcome.secs)));
+            }
+        }
+        outcome
+    };
+
+    let outcomes: Vec<Outcome> = if parallel {
+        thread::scope(|scope| {
+            let handles: Vec<_> = entries
+                .iter()
+                .zip(reporters.iter())
+                .map(|(b, rep)| scope.spawn(move || run_one(rep, b)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| Outcome {
+                        name: "<panicked>".into(),
+                        ok: false,
+                        secs: 0.0,
+                        steps_done: 0,
+                        steps_cached: 0,
+                        tags: Vec::new(),
+                        pushed: false,
+                        error: Some("build thread panicked".into()),
+                    })
                 })
-            })
-            .collect();
-
-        handles
-            .into_iter()
-            .filter_map(|h| match h.join() {
-                Ok((name, true)) => Some(name),
-                Ok((_, false)) => None,
-                Err(_) => Some("<panicked>".to_string()),
-            })
+                .collect()
+        })
+    } else {
+        entries
+            .iter()
+            .zip(reporters.iter())
+            .map(|(b, rep)| run_one(rep, b))
             .collect()
-    });
+    };
 
-    finish(ctx, failures)
+    stop.store(true, Ordering::Relaxed);
+    ticker.join().ok();
+    outcomes
 }
 
-fn finish(ctx: &Ctx, failures: Vec<String>) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn run_basic(
+    ctx: &Ctx,
+    proj: &Project,
+    root: &Path,
+    entries: &[Build],
+    ov: &BuildOverrides,
+    vars: &Vars,
+    progress: Option<&str>,
+    mode: Mode,
+) -> Vec<Outcome> {
+    let run_one = |rep: &Reporter<'_>, b: &Build| -> Outcome {
+        let res = build_one(rep, proj, root, b, ov, vars, progress);
+        let (steps_done, steps_cached, secs) = rep
+            .tracker
+            .lock()
+            .map(|t| (t.steps_done, t.steps_cached, t.total_elapsed()))
+            .unwrap_or((0, 0, 0.0));
+        match res {
+            Ok((tags, pushed)) => Outcome {
+                name: b.name.clone(),
+                ok: true,
+                secs,
+                steps_done,
+                steps_cached,
+                tags,
+                pushed,
+                error: None,
+            },
+            Err(e) => {
+                ctx.err(&format!("{e}"));
+                Outcome {
+                    name: b.name.clone(),
+                    ok: false,
+                    secs,
+                    steps_done,
+                    steps_cached,
+                    tags: Vec::new(),
+                    pushed: false,
+                    error: Some(e.to_string()),
+                }
+            }
+        }
+    };
+
+    let parallel = entries.len() > 1 && !ov.sequential && mode == Mode::Stream;
+    if parallel {
+        thread::scope(|scope| {
+            let handles: Vec<_> = entries
+                .iter()
+                .map(|b| {
+                    scope.spawn(move || {
+                        let rep = Reporter::new(ctx, &b.name, mode, None, None);
+                        run_one(&rep, b)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok())
+                .collect()
+        })
+    } else {
+        entries
+            .iter()
+            .map(|b| {
+                let rep = Reporter::new(ctx, &b.name, mode, None, None);
+                run_one(&rep, b)
+            })
+            .collect()
+    }
+}
+
+fn report(ctx: &Ctx, outcomes: &[Outcome]) -> Result<()> {
+    if ctx.json {
+        let items: Vec<serde_json::Value> = outcomes.iter().map(|o| o.to_json()).collect();
+        ctx.emit_json(&serde_json::Value::Array(items))?;
+    } else {
+        ctx.log(&style::bold(&format!(
+            "{:<14} {:<8} {:>9} {:>14}  {}",
+            "BUILD", "STATUS", "TIME", "STEPS", "TAGS"
+        )));
+        for o in outcomes {
+            let status = if o.ok { "ok" } else { "failed" };
+            let steps = if o.steps_done > 0 {
+                format!("{} ({}c)", o.steps_done, o.steps_cached)
+            } else {
+                "-".to_string()
+            };
+            ctx.log(&format!(
+                "{:<14} {:<8} {:>9} {:>14}  {}",
+                o.name,
+                status,
+                fmt_secs(o.secs),
+                steps,
+                o.tags.join(", ")
+            ));
+        }
+    }
+
+    let failures: Vec<&str> = outcomes
+        .iter()
+        .filter(|o| !o.ok)
+        .map(|o| o.name.as_str())
+        .collect();
     if !failures.is_empty() {
-        return Err(anyhow!(
-            "one or more builds failed: {}",
-            failures.join(", ")
-        ));
+        return Err(anyhow!("one or more builds failed: {}", failures.join(", ")));
     }
     ctx.ok("all builds finished");
     Ok(())
