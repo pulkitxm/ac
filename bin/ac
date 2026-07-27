@@ -109,6 +109,7 @@ ${C_BOLD}BUILD FLAGS${C_RESET}  (each overrides the manifest)
   --platform <os/arch>  e.g. linux/amd64, linux/arm64
   --push / --no-push    override the profile's push setting
   --no-cache            ignore the layer cache
+  --progress <type>     auto|plain|tty; plain shows honest line-by-line output
   --target <stage>      Dockerfile stage
   --builder-cpus <n>    resize the shared buildkit builder
   --builder-memory <m>  e.g. 8g
@@ -225,6 +226,8 @@ main() {
           --platform)       AC_F_PLATFORM="$2"; shift 2 ;;
           --platform=*)     AC_F_PLATFORM="${1#*=}"; shift ;;
           --target)         AC_F_TARGET="$2"; shift 2 ;;
+          --progress)       AC_F_PROGRESS="$2"; shift 2 ;;
+          --progress=*)     AC_F_PROGRESS="${1#*=}"; shift ;;
           --builder-cpus)   AC_F_BCPUS="$2"; shift 2 ;;
           --builder-memory) AC_F_BMEM="$2"; shift 2 ;;
           --push)           AC_F_PUSH="true"; shift ;;
