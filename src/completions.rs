@@ -37,27 +37,54 @@ pub fn completion_command() -> Command {
 }
 
 fn with_candidates(action: Command, project: &str) -> Command {
-    action.mut_args(|arg| decorate(arg, project))
+    with_candidates_at(action, project, "")
 }
 
-fn decorate(arg: Arg, project: &str) -> Arg {
+fn with_candidates_at(action: Command, project: &str, parent: &str) -> Command {
+    let own = action.get_name().to_string();
+    let action_name = if parent.is_empty() {
+        own.clone()
+    } else {
+        format!("{parent} {own}")
+    };
+    let nested: Vec<String> = action
+        .get_subcommands()
+        .map(|s| s.get_name().to_string())
+        .collect();
+
+    let mut out = action.mut_args(|arg| decorate(arg, project, &action_name));
+    // mut_subcommand replaces in place; re-adding with subcommand() would
+    // leave the original undecorated copy behind.
+    for name in nested {
+        let p = project.to_string();
+        let path = action_name.clone();
+        out = out.mut_subcommand(name, move |s| with_candidates_at(s, &p, &path));
+    }
+    out
+}
+
+fn decorate(arg: Arg, project: &str, action: &str) -> Arg {
+    let p = project.to_string();
     match arg.get_id().as_str() {
         "services" | "service" => {
-            let p = project.to_string();
-            arg.add(ArgValueCandidates::new(move || {
-                candidates(service_names(&p))
-            }))
+            arg.add(ArgValueCandidates::new(move || candidates(service_names(&p))))
         }
-        "names" => {
-            let p = project.to_string();
-            arg.add(ArgValueCandidates::new(move || candidates(build_names(&p))))
-        }
-        "profile" => {
-            let p = project.to_string();
-            arg.add(ArgValueCandidates::new(move || {
-                candidates(profile_names(&p))
-            }))
-        }
+        "profile" => arg.add(ArgValueCandidates::new(move || {
+            candidates(profile_names(&p))
+        })),
+        // `names` means different things per command, so match the full path.
+        "names" => match action {
+            "build" => arg.add(ArgValueCandidates::new(move || candidates(build_names(&p)))),
+            "volumes rm" | "volumes inspect" => {
+                arg.add(ArgValueCandidates::new(move || candidates(volume_names(&p))))
+            }
+            // images rm: a project image can come from a service or a build.
+            _ => arg.add(ArgValueCandidates::new(move || {
+                let mut v = service_names(&p);
+                v.extend(build_names(&p));
+                candidates(v)
+            })),
+        },
         _ => arg,
     }
 }
@@ -85,6 +112,19 @@ fn service_names(project: &str) -> Vec<String> {
             let prefixed: Vec<String> = v.iter().map(|s| format!("{project}-{s}")).collect();
             v.extend(prefixed);
             v
+        })
+        .unwrap_or_default()
+}
+
+fn volume_names(project: &str) -> Vec<String> {
+    load(project)
+        .map(|p| {
+            p.manifest
+                .services
+                .iter()
+                .flat_map(|s| s.volumes.iter())
+                .map(|v| v.name.clone())
+                .collect()
         })
         .unwrap_or_default()
 }
