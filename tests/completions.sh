@@ -112,6 +112,9 @@ offers "ac daemon <tab>"      "stop"     2 ac daemon ""
 offers "ac completions <tab>" "zsh"      2 ac completions ""
 offers "ac completions <tab>" "fish"     2 ac completions ""
 
+echo "build safety flags"
+offers "build flags" "--dry-run" 3 ac shop build ""
+
 echo "edge cases"
 omits "unknown project has no actions" "start" 2 ac nosuchproject ""
 offers "global flags still complete"   "--help" 1 ac --

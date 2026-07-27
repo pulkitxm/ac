@@ -24,6 +24,7 @@ pub struct BuildOverrides {
     pub builder_cpus: Option<u32>,
     pub builder_memory: Option<String>,
     pub sequential: bool,
+    pub dry_run: bool,
 }
 
 impl BuildOverrides {
@@ -583,6 +584,57 @@ pub fn project_build(
     }
 
     let root = resolve_root(ctx, proj, ov)?;
+    let vars_preview = vars_for(proj, &profile, &root);
+
+    if ov.dry_run {
+        let plans: Vec<serde_json::Value> = targets
+            .iter()
+            .filter_map(|t| proj.manifest.build(t))
+            .filter_map(|b| {
+                plan_build(proj, b, ov, &vars_preview)
+                    .ok()
+                    .map(|plan| (b, plan))
+            })
+            .map(|(b, plan)| {
+                serde_json::json!({
+                    "build": b.name,
+                    "profile": profile,
+                    "root": root.display().to_string(),
+                    "dockerfile": b.dockerfile,
+                    "platform": plan.platform,
+                    "tags": plan.tags,
+                    "push": plan.push,
+                    "command": plan.args,
+                })
+            })
+            .collect();
+
+        if ctx.json {
+            return ctx.emit_json(&serde_json::Value::Array(plans));
+        }
+        for p in &plans {
+            println!("{}", style::bold(p["build"].as_str().unwrap_or("")));
+            println!("  profile     {}", p["profile"].as_str().unwrap_or(""));
+            println!("  root        {}", p["root"].as_str().unwrap_or(""));
+            println!("  dockerfile  {}", p["dockerfile"].as_str().unwrap_or(""));
+            println!("  platform    {}", p["platform"].as_str().unwrap_or(""));
+            for t in p["tags"].as_array().into_iter().flatten() {
+                println!("  tag         {}", t.as_str().unwrap_or(""));
+            }
+            println!("  push        {}", p["push"]);
+            if let Some(a) = p["command"].as_array() {
+                let joined: Vec<String> = a
+                    .iter()
+                    .map(|x| x.as_str().unwrap_or("").to_string())
+                    .collect();
+                println!("  {}", style::dim(&format!("$ container {}", joined.join(" "))));
+            }
+            println!();
+        }
+        ctx.dim("dry run, nothing was built or pushed");
+        return Ok(());
+    }
+
     ctx.info(&format!("build root: {}", root.display()));
 
     daemon::ensure(ctx)?;
