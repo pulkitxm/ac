@@ -425,6 +425,35 @@ print('ok' if d.get('daemon',{}).get('running') is True else 'bad:'+str(d))
   "$AC" system stop >/dev/null 2>&1
   check "l7 system stop refuses to touch an external daemon" "$(daemon_up && echo yes || echo no)" "yes"
 
+  check_contains "l8 image ls shows sizes by default" "$("$AC" image ls 2>/dev/null)" "FULL SIZE"
+  check_contains "l9 ps -q prints bare names" "$("$AC" ps -q 2>/dev/null)" "actest1-alpha"
+  check_contains "l10 ps table attributes projects" "$("$AC" ps 2>/dev/null | head -1)" "PROJECT"
+  got=$("$AC" ps --format json 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('ok' if isinstance(d,list) else 'bad')
+" 2>&1)
+  check "l11 --format json maps to --json" "$got" "ok"
+  got=$("$AC" --json version 2>/dev/null | python3 -c "
+import json,sys
+print('ok' if json.load(sys.stdin).get('version') else 'bad')
+" 2>&1)
+  check "l12 version --json emits JSON" "$got" "ok"
+  got=$("$AC" --json registry ls 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print('ok' if isinstance(d,list) else 'bad')
+" 2>&1)
+  check "l13 registry ls --json parses" "$got" "ok"
+  "$AC" rmi nosuch-image-zzz:tag >/dev/null 2>&1
+  check "l14 rmi propagates failure" "$([ $? -ne 0 ] && echo nonzero || echo zero)" "nonzero"
+  "$AC" image inspect nosuch-image-zzz:tag >/dev/null 2>&1
+  check "l15 image inspect failure exits non-zero" "$([ $? -ne 0 ] && echo nonzero || echo zero)" "nonzero"
+  check_contains "l16 ac help <cmd> works" "$("$AC" help ls 2>/dev/null)" "projects"
+  err=$("$AC" exec somesvc true 2>&1); rc=$?
+  check "l17 top-level docker verbs hint at project form" "$([ $rc -ne 0 ] && echo nonzero || echo zero)" "nonzero"
+  check_contains "l18 the hint names the fix" "$err" "ac <project> exec"
+
 scen "m. compose-style verbs"
   "$AC" actest1 up >/dev/null 2>&1; rc=$?
   check "m1 up aliases start" "$([ $rc -eq 0 ] && echo ok || echo failed)" "ok"
@@ -480,6 +509,9 @@ print('ok' if r['build']=='tiny' and r['ok'] is True and r['steps']['done']>=1 a
   check_contains "n2 non-tty builds stream raw buildkit lines" "$out" "DONE"
   check_contains "n3 the run ends with a summary table" "$out" "BUILD"
   check_contains "n4 and an overall verdict" "$out" "all builds finished"
+
+  "$AC" actest1 build tiny --dry-run --progress bogus >/dev/null 2>&1
+  check "n5 --progress rejects unknown values" "$([ $? -ne 0 ] && echo nonzero || echo zero)" "nonzero"
 
 else
   scen "a/d/e/f/h/i/j/l/m/n SKIPPED: no daemon was running when the suite started"

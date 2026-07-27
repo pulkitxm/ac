@@ -55,13 +55,20 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     let prog = argv.first().cloned().unwrap_or_else(|| "ac".into());
     let rest = &argv[1..];
 
-    let is_global_flag = |s: &str| matches!(s, "--json" | "--quiet" | "-q" | "--no-color");
+    let is_global_flag = |s: &str| matches!(s, "--json" | "--quiet" | "--no-color");
+
+    let rest = map_format_json(rest)?;
+    let rest = &rest[..];
 
     let mut lead: Vec<String> = Vec::new();
     let mut i = 0;
     while i < rest.len() && is_global_flag(&rest[i]) {
         lead.push(rest[i].clone());
         i += 1;
+    }
+
+    if rest[i..].is_empty() {
+        return Ok(vec![prog]);
     }
 
     let mut out = vec![prog];
@@ -105,14 +112,26 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     let probe = Ctx::new(false, true, true)?;
     let known = manifest::project_names(&probe.config_dir, &probe.ac_home);
     if !known.iter().any(|p| p == first) {
+        let commands: Vec<&str> = RESERVED
+            .iter()
+            .copied()
+            .filter(|c| !c.starts_with("__"))
+            .collect();
+        let hint = if cli::PROJECT_ACTIONS.contains(&first.as_str()) {
+            format!(
+                "\n  '{first}' is a project action: try `ac <project> {first} ...`"
+            )
+        } else {
+            String::new()
+        };
         return Err(anyhow!(
-            "unknown project or command: {first}\n  projects: {}\n  commands: {}\n  try: ac --help",
+            "unknown project or command: {first}{hint}\n  projects: {}\n  commands: {}\n  try: ac --help",
             if known.is_empty() {
                 "(none)".to_string()
             } else {
                 known.join(" ")
             },
-            RESERVED.join(" ")
+            commands.join(" ")
         ));
     }
 
@@ -127,11 +146,56 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     Ok(out)
 }
 
+fn map_format_json(rest: &[String]) -> Result<Vec<String>> {
+    let mut out: Vec<String> = Vec::with_capacity(rest.len());
+    let mut i = 0;
+    let mut passthrough_zone = false;
+    while i < rest.len() {
+        let tok = rest[i].as_str();
+        if matches!(tok, "exec" | "run" | "cp") {
+            passthrough_zone = true;
+        }
+        if !passthrough_zone {
+            if tok == "--format" {
+                match rest.get(i + 1).map(|s| s.as_str()) {
+                    Some("json") => {
+                        out.push("--json".into());
+                        i += 2;
+                        continue;
+                    }
+                    other => {
+                        return Err(anyhow!(
+                            "--format {} is not supported; ac emits JSON only, use --json",
+                            other.unwrap_or("")
+                        ));
+                    }
+                }
+            }
+            if let Some(v) = tok.strip_prefix("--format=") {
+                if v == "json" {
+                    out.push("--json".into());
+                    i += 1;
+                    continue;
+                }
+                return Err(anyhow!(
+                    "--format={v} is not supported; ac emits JSON only, use --json"
+                ));
+            }
+        }
+        out.push(rest[i].clone());
+        i += 1;
+    }
+    Ok(out)
+}
+
 fn run(cli: Cli) -> Result<()> {
     let ctx = Ctx::new(cli.json, cli.quiet, cli.no_color)?;
 
     match &cli.command {
         TopCommand::Version => {
+            if ctx.json {
+                return ctx.emit_json(&serde_json::json!({ "version": ctx::AC_VERSION }));
+            }
             println!("ac {}", ctx::AC_VERSION);
             Ok(())
         }
@@ -181,14 +245,21 @@ fn run(cli: Cli) -> Result<()> {
                 daemon::release(&ctx)
             }
         },
-        TopCommand::Ps { all } => global::ps(&ctx, *all),
+        TopCommand::Ps { all, ids } => global::ps(&ctx, *all, *ids),
         TopCommand::Image { action } => global::image(&ctx, action.as_ref()),
         TopCommand::Volume { action } => global::volume(&ctx, action.as_ref()),
         TopCommand::Network { action } => global::network(&ctx, action.as_ref()),
         TopCommand::System { action } => global::system(&ctx, action.as_ref()),
         TopCommand::Registry { action } => global::registry(&ctx, action.as_ref()),
+        TopCommand::Rmi { references } => global::image(
+            &ctx,
+            Some(&cli::ImageAction::Rm {
+                force: false,
+                references: references.clone(),
+            }),
+        ),
         TopCommand::Df => global::system(&ctx, Some(&cli::SystemAction::Df)),
-        TopCommand::Prune => global::system(&ctx, Some(&cli::SystemAction::Prune)),
+        TopCommand::Prune => global::system(&ctx, Some(&cli::SystemAction::Prune { all: false })),
         TopCommand::Supervise => supervisor::run_loop(&ctx),
         TopCommand::Project { name, action } => {
             let proj = manifest::load_project(&ctx.config_dir, &ctx.ac_home, name)?;
@@ -288,6 +359,9 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
 
         Action::Run {
             keep,
+            rm_noop: _,
+            interactive: _,
+            tty: _,
             env,
             no_volumes,
             service,
@@ -311,9 +385,13 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             project::export(ctx, proj, service, output.as_deref())
         }
 
-        Action::Stop { services } => project::stop(ctx, proj, services),
+        Action::Stop { time, services } => project::stop(ctx, proj, services, *time),
 
-        Action::Down { services } => project::down(ctx, proj, services),
+        Action::Down {
+            volumes,
+            time,
+            services,
+        } => project::down(ctx, proj, services, *time, *volumes),
 
         Action::Restart { recreate, services } => {
             let targets = proj.target_services(services)?;
@@ -369,7 +447,7 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             }
         }
 
-        Action::Ls => {
+        Action::Ls { all: _ } => {
             let rows = project::status_rows(ctx, proj);
             if ctx.json {
                 ctx.emit_json(&project::status_json(&rows))
@@ -416,7 +494,12 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             }
         }
 
-        Action::Exec { service, command } => {
+        Action::Exec {
+            interactive: _,
+            tty: _,
+            service,
+            command,
+        } => {
             let svc = proj.target_services(std::slice::from_ref(service))?;
             let mut argv = vec!["exec".to_string()];
             argv.extend(tty_flags());
@@ -426,7 +509,11 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             exit_like(status)
         }
 
-        Action::Sh { service } => {
+        Action::Sh {
+            interactive: _,
+            tty: _,
+            service,
+        } => {
             let name = match service {
                 Some(s) => proj.target_services(std::slice::from_ref(s))?[0].clone(),
                 None => proj
@@ -446,7 +533,10 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             exit_like(status)
         }
 
-        Action::Stats { services } => {
+        Action::Stats {
+            no_stream,
+            services,
+        } => {
             let names = proj.target_container_names(services)?;
             if ctx.json {
                 let mut argv = vec![
@@ -456,11 +546,14 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     "json".into(),
                 ];
                 argv.extend(names);
-                let text = ctx.container(&argv).stdout()?;
+                let text = ctx.container(&argv).stdout_timeout(20)?;
                 let v: serde_json::Value = serde_json::from_str(&text)?;
                 return ctx.emit_json(&v);
             }
             let mut argv = vec!["stats".to_string()];
+            if *no_stream {
+                argv.push("--no-stream".into());
+            }
             argv.extend(names);
             let status = ctx.container(&argv).status()?;
             exit_like(status)
@@ -485,16 +578,11 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             exit_like(status)
         }
 
-        Action::Rm { services } => {
-            let mut argv = vec!["rm".to_string(), "--force".into()];
-            argv.extend(proj.target_container_names(services)?);
-            ctx.container(&argv).status()?;
-            supervisor::settle(ctx)
-        }
+        Action::Rm { services } => project::remove(ctx, proj, services),
 
         Action::Cp { src, dst } => {
             let status = ctx
-                .container(["cp", &cp_path(proj, src), &cp_path(proj, dst)])
+                .container(["cp", &cp_path(proj, src)?, &cp_path(proj, dst)?])
                 .status()?;
             exit_like(status)
         }
@@ -503,6 +591,28 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
 
         Action::Images { action } => {
             let list = || -> Vec<(String, String)> {
+                let render = |image: &str| -> String {
+                    if !image.contains("{{") {
+                        return image.to_string();
+                    }
+                    let profile = std::env::var("AC_PROFILE")
+                        .ok()
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| {
+                            proj.manifest
+                                .profiles
+                                .get("local")
+                                .map(|_| "local".to_string())
+                        })
+                        .or_else(|| proj.manifest.profile_names().first().cloned());
+                    match profile {
+                        Some(p) => {
+                            let root = std::env::current_dir().unwrap_or_default();
+                            build::interpolate(image, &vars_for(proj, &p, &root))
+                        }
+                        None => image.to_string(),
+                    }
+                };
                 let mut v: Vec<(String, String)> = proj
                     .manifest
                     .services
@@ -513,7 +623,7 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     proj.manifest
                         .builds
                         .iter()
-                        .map(|b| (b.name.clone(), b.image.clone())),
+                        .map(|b| (b.name.clone(), render(&b.image))),
                 );
                 v
             };
@@ -565,7 +675,12 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     let mut failed = 0;
                     for (name, image) in &targets {
                         ctx.info(&format!("removing image for {name}"));
-                        if ctx.container(["image", "rm", image]).status().is_err() {
+                        let ok = ctx
+                            .container(["image", "rm", image])
+                            .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        if !ok {
                             ctx.warn(&format!("could not remove {image}"));
                             failed += 1;
                         }
@@ -670,8 +785,13 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     let mut failed = 0;
                     for (short, full) in &targets {
                         ctx.info(&format!("deleting volume {short} ({full})"));
-                        if ctx.container(["volume", "delete", full]).status().is_err() {
-                            ctx.warn(&format!("could not delete {full}"));
+                        let ok = ctx
+                            .container(["volume", "delete", full])
+                            .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        if !ok {
+                            ctx.warn(&format!("could not delete {full} (still attached to a container? remove it first)"));
                             failed += 1;
                         }
                     }
@@ -834,23 +954,27 @@ fn tty_flags() -> Vec<String> {
     }
 }
 
-fn cp_path(proj: &Project, arg: &str) -> String {
+fn cp_path(proj: &Project, arg: &str) -> Result<String> {
     if arg.starts_with('/') {
-        return arg.to_string();
+        return Ok(arg.to_string());
     }
     let Some((head, tail)) = arg.split_once(':') else {
-        return arg.to_string();
+        return Ok(arg.to_string());
     };
-    if head.contains('/') {
-        return arg.to_string();
+    if head.contains('/') || !tail.starts_with('/') {
+        return Ok(arg.to_string());
     }
     if proj.has_service(head) {
-        return format!(
+        return Ok(format!(
             "{}:{tail}",
             proj.container_name(&proj.normalize_service(head))
-        );
+        ));
     }
-    arg.to_string()
+    Err(anyhow!(
+        "no such service '{head}' in project '{}' (have: {})",
+        proj.name,
+        proj.manifest.service_names().join(" ")
+    ))
 }
 
 fn exit_like(status: std::process::ExitStatus) -> Result<()> {
@@ -863,23 +987,6 @@ fn exit_like(status: std::process::ExitStatus) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn global_flags_alone_are_not_duplicated() {
-        let argv: Vec<String> = ["ac", "--json"].iter().map(|s| s.to_string()).collect();
-        let out = rewrite_argv(&argv).expect("rewrite");
-        assert_eq!(out, vec!["ac", "--json"], "flags must not be repeated");
-    }
-
-    #[test]
-    fn several_global_flags_alone_survive_once_each() {
-        let argv: Vec<String> = ["ac", "--json", "--quiet", "--no-color"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        let out = rewrite_argv(&argv).expect("rewrite");
-        assert_eq!(out, vec!["ac", "--json", "--quiet", "--no-color"]);
-    }
-
     #[test]
     fn global_flags_before_a_project_are_kept_once() {
         let argv: Vec<String> = ["ac", "--json", "noveum", "ls"]
@@ -909,14 +1016,45 @@ mod tests {
     }
 
     #[test]
-    fn cp_rewrites_only_service_refs() {
+    fn cp_rewrites_service_refs_and_rejects_unknown_ones() {
         let p = proj_fixture();
-        assert_eq!(cp_path(&p, "redis:/data"), "demo-redis:/data");
-        assert_eq!(cp_path(&p, "demo-redis:/data"), "demo-redis:/data");
-        assert_eq!(cp_path(&p, "/etc/hosts"), "/etc/hosts");
-        assert_eq!(cp_path(&p, "./a/b:c"), "./a/b:c");
-        assert_eq!(cp_path(&p, "unknown:/x"), "unknown:/x");
-        assert_eq!(cp_path(&p, "plain.txt"), "plain.txt");
+        assert_eq!(cp_path(&p, "redis:/data").unwrap(), "demo-redis:/data");
+        assert_eq!(cp_path(&p, "demo-redis:/data").unwrap(), "demo-redis:/data");
+        assert_eq!(cp_path(&p, "/etc/hosts").unwrap(), "/etc/hosts");
+        assert_eq!(cp_path(&p, "./a/b:c").unwrap(), "./a/b:c");
+        assert_eq!(cp_path(&p, "plain.txt").unwrap(), "plain.txt");
+        assert_eq!(cp_path(&p, "local:file").unwrap(), "local:file");
+        let err = cp_path(&p, "unknown:/x").unwrap_err();
+        assert!(err.to_string().contains("redis web"), "{err}");
+    }
+
+    #[test]
+    fn format_json_maps_to_json_outside_passthrough_zones() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            map_format_json(&a(&["ps", "--format", "json"])).unwrap(),
+            a(&["ps", "--json"])
+        );
+        assert_eq!(
+            map_format_json(&a(&["image", "ls", "--format=json"])).unwrap(),
+            a(&["image", "ls", "--json"])
+        );
+        assert_eq!(
+            map_format_json(&a(&["demo", "exec", "web", "cmd", "--format", "json"])).unwrap(),
+            a(&["demo", "exec", "web", "cmd", "--format", "json"])
+        );
+        let err = map_format_json(&a(&["ps", "--format", "table"])).unwrap_err();
+        assert!(err.to_string().contains("--json"), "{err}");
+    }
+
+    #[test]
+    fn bare_invocations_collapse_to_help() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(rewrite_argv(&a(&["ac", "--json"])).unwrap(), a(&["ac"]));
+        assert_eq!(
+            rewrite_argv(&a(&["ac", "--json", "--quiet"])).unwrap(),
+            a(&["ac"])
+        );
     }
 
     #[test]

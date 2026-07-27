@@ -60,18 +60,26 @@ fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
 }
 
 fn poll_ready(ctx: &Ctx, cname: &str, svc: &Service, timeout: u64) -> bool {
-    let mut waited = 0u64;
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout);
     if !ctx.json {
         print!("  waiting for {cname} ");
         std::io::stdout().flush().ok();
     }
-    while waited < timeout {
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
         let ok = if svc.ready_cmd.is_empty() {
             Snapshot::query_silent(ctx).state(cname) == "running"
         } else {
             let mut argv: Vec<String> = vec!["exec".into(), cname.to_string()];
             argv.extend(svc.ready_cmd.iter().cloned());
-            ctx.container(&argv).silent().quiet_ok()
+            let probe_cap = remaining.as_secs().clamp(2, 20);
+            ctx.container(&argv)
+                .silent()
+                .quiet_ok_timeout(probe_cap)
+                .unwrap_or(false)
         };
         if ok {
             if !ctx.json {
@@ -83,8 +91,10 @@ fn poll_ready(ctx: &Ctx, cname: &str, svc: &Service, timeout: u64) -> bool {
             print!(".");
             std::io::stdout().flush().ok();
         }
+        if std::time::Instant::now() + Duration::from_secs(2) >= deadline {
+            break;
+        }
         thread::sleep(Duration::from_secs(2));
-        waited += 2;
     }
     if !ctx.json {
         println!(" {}", style::yellow("timeout"));
@@ -210,11 +220,15 @@ pub fn start_service(ctx: &Ctx, proj: &Project, name: &str, recreate: bool) -> R
     let state = snap.state(&cname);
 
     if state == "running" {
-        ctx.ok(&format!("{cname} already running"));
-        return Ok(());
+        if !recreate {
+            ctx.ok(&format!("{cname} already running"));
+            return Ok(());
+        }
+        ctx.info(&format!("stopping {cname} to recreate it"));
+        ctx.container(["stop", &cname]).quiet_ok();
     }
 
-    if state == "stopped" || state == "exited" || state == "created" {
+    if state == "running" || state == "stopped" || state == "exited" || state == "created" {
         if recreate {
             ctx.dim(&format!("  recreating {cname}"));
             ctx.container(["rm", &cname]).quiet_ok();
@@ -533,33 +547,63 @@ pub fn login(ctx: &Ctx, proj: &Project, vars: &Vars, images: &[String]) -> Resul
     Ok(())
 }
 
-pub fn stop(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
+fn stop_args(cname: &str, time: Option<u32>) -> Vec<String> {
+    let mut args = vec!["stop".to_string()];
+    if let Some(t) = time {
+        args.push("--time".into());
+        args.push(t.to_string());
+    }
+    args.push(cname.to_string());
+    args
+}
+
+pub fn stop(ctx: &Ctx, proj: &Project, services: &[String], time: Option<u32>) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
 
-    let mut stopped = 0;
+    let mut stopped: Vec<String> = Vec::new();
     for svc in &targets {
         let cname = proj.container_name(svc);
         match snap.state(&cname).as_str() {
             "absent" => ctx.dim(&format!("  {cname} not created")),
             "running" => {
                 ctx.info(&format!("stopping {cname}"));
-                ctx.container(["stop", &cname]).quiet_ok();
-                ctx.ok(&format!("{cname} stopped"));
-                stopped += 1;
+                ctx.container(stop_args(&cname, time)).quiet_ok();
+                stopped.push(cname);
             }
             other => ctx.dim(&format!("  {cname} already {other}")),
         }
     }
 
-    if stopped == 0 {
+    if stopped.is_empty() {
         ctx.dim("nothing to stop, no service was running");
+    } else {
+        let after = Snapshot::query_silent(ctx);
+        let mut failed = 0;
+        for cname in &stopped {
+            if after.state(cname) == "running" {
+                ctx.warn(&format!("{cname} is still running despite the stop"));
+                failed += 1;
+            } else {
+                ctx.ok(&format!("{cname} stopped"));
+            }
+        }
+        if failed > 0 {
+            supervisor::settle(ctx)?;
+            return Err(anyhow!("{failed} container(s) did not stop"));
+        }
     }
 
     supervisor::settle(ctx)
 }
 
-pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
+pub fn down(
+    ctx: &Ctx,
+    proj: &Project,
+    services: &[String],
+    time: Option<u32>,
+    volumes: bool,
+) -> Result<()> {
     let targets = proj.target_services(services)?;
     let snap = Snapshot::query(ctx);
 
@@ -573,7 +617,7 @@ pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
         }
         if state == "running" {
             ctx.info(&format!("stopping {cname}"));
-            ctx.container(["stop", &cname]).quiet_ok();
+            ctx.container(stop_args(&cname, time)).quiet_ok();
         }
         ctx.container(["rm", &cname]).quiet_ok();
         ctx.ok(&format!("{cname} removed"));
@@ -584,7 +628,59 @@ pub fn down(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
         ctx.dim("nothing to remove, every service was already absent");
     }
 
+    if volumes {
+        let mut failed = 0;
+        for svc in &targets {
+            let Some(s) = proj.manifest.service(svc) else {
+                continue;
+            };
+            for vol in &s.volumes {
+                let full = proj.volume_name(&vol.name);
+                ctx.info(&format!("deleting volume {full} (data is gone)"));
+                if !ctx.container(["volume", "delete", &full]).quiet_ok() {
+                    ctx.warn(&format!("could not delete {full}"));
+                    failed += 1;
+                }
+            }
+        }
+        if failed > 0 {
+            supervisor::settle(ctx)?;
+            return Err(anyhow!("{failed} volume(s) could not be deleted"));
+        }
+    }
+
     supervisor::settle(ctx)
+}
+
+pub fn remove(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
+    let targets = proj.target_services(services)?;
+    let snap = Snapshot::query(ctx);
+
+    let mut failed = 0;
+    let mut removed = 0;
+    for svc in &targets {
+        let cname = proj.container_name(svc);
+        if snap.state(&cname) == "absent" {
+            ctx.dim(&format!("  {cname} not created"));
+            continue;
+        }
+        if ctx.container(["rm", "--force", &cname]).status()?.success() {
+            ctx.ok(&format!("{cname} removed"));
+            removed += 1;
+        } else {
+            ctx.warn(&format!("could not remove {cname}"));
+            failed += 1;
+        }
+    }
+    if removed == 0 && failed == 0 {
+        ctx.dim("nothing to remove, every service was already absent");
+    }
+
+    supervisor::settle(ctx)?;
+    if failed > 0 {
+        return Err(anyhow!("{failed} container(s) could not be removed"));
+    }
+    Ok(())
 }
 
 pub struct ServiceStatus {

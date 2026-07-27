@@ -27,13 +27,19 @@ echo with `--quiet` or AC_QUIET=1.
 
 | docker | ac |
 | --- | --- |
-| docker compose up -d | ac \<project\> start (or: up) |
+| docker compose up -d | ac \<project\> start (or: up; -d is accepted and ignored) |
 | docker compose down | ac \<project\> down (containers removed, volumes survive) |
+| docker compose down -v | ac \<project\> down -v (volumes AND DATA deleted too) |
 | docker compose stop / start | ac \<project\> stop / start (restart in place) |
+| docker stop -t 5 | ac \<project\> stop -t 5 |
 | docker compose restart | ac \<project\> restart |
 | docker compose ps | ac \<project\> ls |
 | docker compose logs -f | ac \<project\> logs -f |
-| docker compose run --rm svc cmd | ac \<project\> run svc cmd |
+| docker compose run --rm svc cmd | ac \<project\> run svc cmd (--rm is the default; --keep retains) |
+| docker compose pull | ac \<project\> pull |
+| docker compose exec svc cmd | ac \<project\> exec svc cmd |
+| docker kill -s TERM | ac \<project\> kill -s TERM |
+| docker compose rm -f | ac \<project\> rm |
 | docker compose create | ac \<project\> create |
 | docker exec -it c sh | ac \<project\> sh [svc] |
 | docker exec c cmd | ac \<project\> exec svc cmd |
@@ -42,8 +48,10 @@ echo with `--quiet` or AC_QUIET=1.
 | docker build | ac \<project\> build |
 | docker push | ac \<project\> push -P \<profile\> |
 | docker export | ac \<project\> export svc (service must be stopped) |
-| docker ps | ac ps [-a] |
-| docker images | ac image ls |
+| docker ps [-a] [-q] | ac ps [-a] [-q] (table includes project and service) |
+| docker images | ac image ls (sizes shown by default) |
+| docker images -q | ac image ls -q |
+| docker rmi ref | ac rmi ref (or: ac image rm) |
 | docker pull / push | ac image pull / push \<full-reference\> |
 | docker tag | ac image tag src dst |
 | docker save / load | ac image save -o f refs... / ac image load -i f |
@@ -51,14 +59,25 @@ echo with `--quiet` or AC_QUIET=1.
 | docker volume ls/create/rm/inspect/prune | ac volume ... |
 | docker network ls/create/rm/inspect/prune | ac network ... |
 | docker system df / prune | ac system df / prune |
+| docker system prune -a | ac system prune --all |
 | docker login | ac registry login -u user server |
 | docker inspect | ac \<project\> inspect [svc] or ac image inspect ref |
-| docker stats | ac \<project\> stats |
+| docker stats [--no-stream] | ac \<project\> stats [--no-stream] |
 | docker wait (rough) | ac \<project\> wait (readiness, not exit) |
 
 Services are addressed by short name (`redis`) or container name
 (`noveum-redis`). Naming an unknown service fails loudly and lists the valid
 ones. When a project name collides with an ac command, use `ac -p <project>`.
+
+More docker habits that just work: `exec -it` and `run -it` parse and are
+ignored, since interactivity and TTY allocation are detected automatically.
+`--format json` anywhere maps to `--json`. `list`, `delete` and `remove`
+work as spellings of `ls` and `rm` in the image, volume and network groups.
+`ac help <command>` works alongside `--help`.
+
+Discovery commands that read only the manifest, so they work with the
+daemon stopped: `ac <project> services`, `ac <project> builds`,
+`ac <project> profiles`, `ac <project> config`, `ac <project> images`.
 
 ## The rules that are different from docker
 
@@ -112,8 +131,11 @@ rejected by name, so typos surface immediately. A file in the ac repo's
 
 ## Agent etiquette
 
-- Prefer `--json` and parse stdout; treat stderr as commentary.
+- Prefer `--json` and parse stdout; treat stderr as commentary. On failure
+  stdout may be empty; the exit code is the contract.
 - Gate on exit codes: `wait`, `build`, `push` and `run` all propagate failure.
+- `wait` enforces its timeout as a wall clock even when a readiness probe
+  itself wedges, so it is safe to gate on unconditionally.
 - Do not stop or restart services you did not start; another agent or the
   user may be relying on them. `ac ps --json` shows what is running and
   which project owns it.

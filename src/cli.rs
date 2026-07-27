@@ -25,7 +25,6 @@ DAEMON OWNERSHIP
 
 Every underlying `container` command is echoed to stderr, dimmed and prefixed
 with `$ `, before it runs. Set AC_QUIET=1 or pass --quiet to suppress that.",
-    disable_help_subcommand = true,
     propagate_version = true
 )]
 pub struct Cli {
@@ -34,7 +33,9 @@ pub struct Cli {
     pub json: bool,
 
     /// Do not echo the underlying `container` commands. Same as AC_QUIET=1.
-    #[arg(short, long, global = true)]
+    /// The short -q belongs to the docker-style listing commands (ps, image
+    /// ls), where it means "ids only".
+    #[arg(long, global = true)]
     pub quiet: bool,
 
     /// Disable ANSI colour. Colour is off automatically when stdout is not a
@@ -88,6 +89,9 @@ pub enum TopCommand {
         /// Include containers that are not running.
         #[arg(short, long)]
         all: bool,
+        /// Only print container names, docker ps -q style.
+        #[arg(short = 'q')]
+        ids: bool,
     },
 
     /// Manage the local image store, docker image style.
@@ -135,6 +139,14 @@ pub enum TopCommand {
     Registry {
         #[command(subcommand)]
         action: Option<RegistryAction>,
+    },
+
+    /// Remove images, docker rmi style. Same as `ac image rm`.
+    #[command(hide = true)]
+    Rmi {
+        /// References to remove.
+        #[arg(required = true)]
+        references: Vec<String>,
     },
 
     /// Disk usage for images, containers and volumes.
@@ -231,6 +243,7 @@ pub enum CompletionShell {
     Zsh,
     Fish,
     Elvish,
+    #[value(name = "powershell", alias = "power-shell")]
     PowerShell,
 }
 
@@ -272,6 +285,10 @@ pub enum Action {
     ///
     /// Example: ac noveum stop redis
     Stop {
+        /// Seconds to wait before the container is killed, docker stop -t
+        /// style.
+        #[arg(short = 't', long = "time", value_name = "SECS")]
+        time: Option<u32>,
         /// Services to act on. Empty means all of them.
         services: Vec<String>,
     },
@@ -283,6 +300,14 @@ pub enum Action {
     ///
     /// Example: ac noveum down
     Down {
+        /// ALSO DELETE the services' named volumes and their data, docker
+        /// compose down -v style. Without this flag volumes always survive.
+        #[arg(short = 'v', long)]
+        volumes: bool,
+        /// Seconds to wait before the container is killed, docker stop -t
+        /// style.
+        #[arg(short = 't', long = "time", value_name = "SECS")]
+        time: Option<u32>,
         /// Services to act on. Empty means all of them.
         services: Vec<String>,
     },
@@ -307,7 +332,12 @@ pub enum Action {
     ///
     /// Example: ac noveum ls --json
     #[command(alias = "ps", alias = "status")]
-    Ls,
+    Ls {
+        /// Accepted for docker muscle memory; every service is always shown,
+        /// including absent ones.
+        #[arg(short = 'a', long = "all", hide = true)]
+        all: bool,
+    },
 
     /// Show or follow logs.
     ///
@@ -349,6 +379,17 @@ pub enum Action {
         /// Keep the container after the command exits instead of removing it.
         #[arg(long)]
         keep: bool,
+        /// Accepted for docker muscle memory; one-off containers are removed
+        /// on exit by default (use --keep to retain).
+        #[arg(long = "rm", hide = true)]
+        rm_noop: bool,
+        /// Accepted for docker muscle memory; interactivity is automatic.
+        #[arg(short = 'i', hide = true)]
+        interactive: bool,
+        /// Accepted for docker muscle memory; a TTY is allocated when
+        /// stdin and stdout are terminals.
+        #[arg(short = 't', hide = true)]
+        tty: bool,
         /// Extra KEY=VALUE environment entries, overriding the manifest.
         #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
         env: Vec<String>,
@@ -443,6 +484,14 @@ pub enum Action {
     ///
     /// Example: ac noveum exec postgres psql -U user -c 'select 1'
     Exec {
+        /// Accepted for docker muscle memory; interactivity is detected
+        /// automatically.
+        #[arg(short = 'i', hide = true)]
+        interactive: bool,
+        /// Accepted for docker muscle memory; a TTY is allocated
+        /// automatically when stdin and stdout are terminals.
+        #[arg(short = 't', hide = true)]
+        tty: bool,
         /// Service to run in.
         service: String,
         /// Command and arguments.
@@ -457,6 +506,13 @@ pub enum Action {
     /// Example: ac noveum sh redis
     #[command(alias = "shell")]
     Sh {
+        /// Accepted for docker muscle memory; interactivity is automatic.
+        #[arg(short = 'i', hide = true)]
+        interactive: bool,
+        /// Accepted for docker muscle memory; a TTY is allocated when
+        /// stdin and stdout are terminals.
+        #[arg(short = 't', hide = true)]
+        tty: bool,
         /// Service to enter. Defaults to the first service in the manifest.
         service: Option<String>,
     },
@@ -464,7 +520,12 @@ pub enum Action {
     /// Live resource usage.
     ///
     /// Runs: container stats <containers...>
+    ///
+    /// --json implies --no-stream and emits one snapshot.
     Stats {
+        /// Take one sample and exit instead of streaming, docker style.
+        #[arg(long)]
+        no_stream: bool,
         /// Services to include. Empty means all of them.
         services: Vec<String>,
     },
@@ -653,8 +714,9 @@ pub struct BuildArgs {
     #[arg(long)]
     pub no_cache: bool,
 
-    /// Build output style. `plain` shows honest line by line output.
-    #[arg(long, value_name = "auto|plain|tty")]
+    /// Build output style. `plain` streams raw lines, `tty` hands the
+    /// display to buildkit, `auto` picks the live renderer on a terminal.
+    #[arg(long, value_parser = ["auto", "plain", "tty"])]
     pub progress: Option<String>,
 
     /// Dockerfile stage to stop at.
@@ -726,16 +788,32 @@ pub const RESERVED: &[&str] = &[
     "completions",
     "version",
     "project",
+    "rmi",
     "help",
     "__supervise",
 ];
 
+pub const PROJECT_ACTIONS: &[&str] = &[
+    "start", "up", "stop", "down", "restart", "logs", "run", "create", "top",
+    "wait", "push", "export", "exec", "sh", "shell", "stats", "inspect",
+    "kill", "rm", "cp", "pull", "port", "ip", "env", "build", "login",
+    "services", "builds", "profiles",
+];
+
 #[derive(Debug, Subcommand)]
 pub enum ImageAction {
-    /// List every image in the local store.
+    /// List every image in the local store, with sizes, docker images style.
     ///
-    /// Runs: container image ls (--format json with --json)
-    Ls,
+    /// Runs: container image ls --verbose (--format json with --json)
+    #[command(alias = "list")]
+    Ls {
+        /// Accepted for docker muscle memory; sizes are already shown.
+        #[arg(short = 'v', long, hide = true)]
+        verbose: bool,
+        /// Only print image names, docker images -q style.
+        #[arg(short = 'q')]
+        ids: bool,
+    },
 
     /// Pull an image by full OCI reference.
     ///
@@ -764,7 +842,11 @@ pub enum ImageAction {
     /// Remove images from the local store.
     ///
     /// Runs: container image rm <references...>
+    #[command(alias = "delete", alias = "remove")]
     Rm {
+        /// Accepted for docker muscle memory; removal never prompts anyway.
+        #[arg(short = 'f', long, hide = true)]
+        force: bool,
         /// References to remove.
         #[arg(required = true)]
         references: Vec<String>,
@@ -832,6 +914,7 @@ pub enum VolumeAction {
     /// List every volume the daemon knows about.
     ///
     /// Runs: container volume ls (--format json with --json)
+    #[command(alias = "list")]
     Ls,
 
     /// Create a named volume.
@@ -848,6 +931,7 @@ pub enum VolumeAction {
     /// Delete volumes. THIS DESTROYS THE DATA IN THEM.
     ///
     /// Runs: container volume rm <names...>
+    #[command(alias = "delete", alias = "remove")]
     Rm {
         /// Volumes to delete.
         #[arg(required = true)]
@@ -874,6 +958,7 @@ pub enum NetworkAction {
     /// List networks.
     ///
     /// Runs: container network ls (--format json with --json)
+    #[command(alias = "list")]
     Ls,
 
     /// Create a network.
@@ -893,6 +978,7 @@ pub enum NetworkAction {
     /// Delete networks.
     ///
     /// Runs: container network rm <names...>
+    #[command(alias = "delete", alias = "remove")]
     Rm {
         /// Networks to delete.
         #[arg(required = true)]
@@ -943,7 +1029,11 @@ pub enum SystemAction {
     ///
     /// Runs `container prune` then `container image prune`, then re-checks
     /// whether the daemon can be released. Same as `ac prune`.
-    Prune,
+    Prune {
+        /// Also remove every unused image, docker system prune -a style.
+        #[arg(short, long)]
+        all: bool,
+    },
 
     /// Logs from the `container` system services themselves.
     ///

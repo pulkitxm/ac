@@ -289,6 +289,75 @@ impl<'a> Runner<'a> {
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
 
+    pub fn quiet_ok_timeout(&self, secs: u64) -> Option<bool> {
+        self.echo();
+        let mut child = self
+            .build()
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return Some(status.success()),
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        child.kill().ok();
+                        child.wait().ok();
+                        return None;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(_) => return Some(false),
+            }
+        }
+    }
+
+    pub fn stdout_timeout(&self, secs: u64) -> Result<String> {
+        self.echo();
+        let mut child = self
+            .build()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("spawning: {}", self.display()))?;
+        let mut out = child.stdout.take();
+        let reader = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = String::new();
+            if let Some(o) = out.as_mut() {
+                o.read_to_string(&mut buf).ok();
+            }
+            buf
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let text = reader.join().unwrap_or_default();
+                    if !status.success() {
+                        return Err(anyhow!("{} exited {status}", self.display()));
+                    }
+                    return Ok(text);
+                }
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        child.kill().ok();
+                        child.wait().ok();
+                        reader.join().ok();
+                        return Err(anyhow!(
+                            "{} did not finish within {secs}s and was killed",
+                            self.display()
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => return Err(anyhow!("waiting on {}: {e}", self.display())),
+            }
+        }
+    }
+
     pub fn spawn_piped(&self) -> Result<std::process::Child> {
         self.echo();
         self.build()
