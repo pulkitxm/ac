@@ -89,6 +89,15 @@ pub fn ensure(ctx: &Ctx) -> Result<()> {
     Ok(())
 }
 
+pub fn require(ctx: &Ctx) -> Result<()> {
+    if running(ctx) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "container daemon is not running; start it with `ac system start` or any `ac <project> start`"
+    ))
+}
+
 pub fn release(ctx: &Ctx) -> Result<()> {
     if !is_ours(ctx) {
         ctx.dim("daemon was not started by ac - leaving it running");
