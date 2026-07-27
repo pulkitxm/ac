@@ -471,6 +471,11 @@ Two exceptions, both because they are functional rather than explanatory:
 - `##` annotations on Makefile target lines. The `help` target parses them with
   awk to build its own listing.
 
+One non-obvious piece of code, documented here instead of inline:
+`src/completions.rs` leaks each project name with `Box::leak` because clap
+wants `'static` names; the completion process emits candidates and exits
+immediately, so the leak is deliberate and harmless.
+
 Check for regressions:
 
 ```

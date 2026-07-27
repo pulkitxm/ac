@@ -24,8 +24,6 @@ pub fn completion_command() -> Command {
 
     let mut cmd = base;
     for name in names {
-        // clap wants a 'static name. This runs once, in a process that exits
-        // straight after emitting candidates, so leaking is the cheap option.
         let leaked: &'static str = Box::leak(name.clone().into_boxed_str());
         let mut sub = Command::new(leaked).about(format!("Actions for {name}"));
         for action in template.get_subcommands() {
@@ -53,8 +51,6 @@ fn with_candidates_at(action: Command, project: &str, parent: &str) -> Command {
         .collect();
 
     let mut out = action.mut_args(|arg| decorate(arg, project, &action_name));
-    // mut_subcommand replaces in place; re-adding with subcommand() would
-    // leave the original undecorated copy behind.
     for name in nested {
         let p = project.to_string();
         let path = action_name.clone();
@@ -72,13 +68,11 @@ fn decorate(arg: Arg, project: &str, action: &str) -> Arg {
         "profile" => arg.add(ArgValueCandidates::new(move || {
             candidates(profile_names(&p))
         })),
-        // `names` means different things per command, so match the full path.
         "names" => match action {
             "build" => arg.add(ArgValueCandidates::new(move || candidates(build_names(&p)))),
             "volumes rm" | "volumes inspect" => {
                 arg.add(ArgValueCandidates::new(move || candidates(volume_names(&p))))
             }
-            // images rm: a project image can come from a service or a build.
             _ => arg.add(ArgValueCandidates::new(move || {
                 let mut v = service_names(&p);
                 v.extend(build_names(&p));
