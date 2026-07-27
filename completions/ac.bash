@@ -12,22 +12,25 @@ _ac_bash_projects() {
   done | sort -u
 }
 
+# Bare service names plus the <project>-<service> form that `ac <p> ls` prints.
 _ac_bash_services() {
   local proj="$1" d f
   for d in "${XDG_CONFIG_HOME:-$HOME/.config}/ac/projects" "${AC_HOME:-$HOME/scripts/ac}/projects"; do
     f="$d/$proj.json"
     if [ -f "$f" ]; then
-      jq -r '.services[].name' "$f" 2>/dev/null
+      jq -r ".services[].name, \"${proj}-\" + .services[].name" "$f" 2>/dev/null
       return
     fi
   done
 }
 
 _ac_complete() {
-  local cur prev words cword
+  local cur prev
   cur="${COMP_WORDS[COMP_CWORD]}"
-  local commands="ls projects status daemon config help version"
-  local actions="start stop restart status ps logs exec ip"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  local commands="ls projects status daemon images df prune config help version"
+  local actions="start stop restart ls ps status logs exec sh shell stats inspect kill rm cp pull images port ip env login config"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=( $(compgen -W "$(_ac_bash_projects) $commands" -- "$cur") )
@@ -42,7 +45,7 @@ _ac_complete() {
   fi
 
   case "$first" in
-    ls|projects|status|config|help|version) return ;;
+    ls|projects|status|config|help|version|images|df|prune) return ;;
   esac
 
   if [ "$COMP_CWORD" -eq 2 ]; then
@@ -50,13 +53,28 @@ _ac_complete() {
     return
   fi
 
-  if [ "$COMP_CWORD" -eq 3 ]; then
-    case "${COMP_WORDS[2]}" in
-      logs|exec|ip)
-        COMPREPLY=( $(compgen -W "$(_ac_bash_services "$first")" -- "$cur") )
-        ;;
-    esac
-  fi
+  local action="${COMP_WORDS[2]}"
+  local svcs; svcs="$(_ac_bash_services "$first")"
+
+  case "$action" in
+    start|stop|restart|stats|inspect|rm|pull|port|ip)
+      COMPREPLY=( $(compgen -W "$svcs" -- "$cur") ) ;;
+    sh|shell|env)
+      [ "$COMP_CWORD" -eq 3 ] && COMPREPLY=( $(compgen -W "$svcs" -- "$cur") ) ;;
+    exec)
+      [ "$COMP_CWORD" -eq 3 ] && COMPREPLY=( $(compgen -W "$svcs" -- "$cur") ) ;;
+    logs)
+      COMPREPLY=( $(compgen -W "$svcs -f -n --boot" -- "$cur") ) ;;
+    kill)
+      if [ "$prev" = "-s" ] || [ "$prev" = "--signal" ]; then
+        COMPREPLY=( $(compgen -W "TERM KILL HUP INT QUIT USR1 USR2" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "$svcs -s" -- "$cur") )
+      fi
+      ;;
+    cp)
+      COMPREPLY=( $(compgen -W "$svcs" -- "$cur") $(compgen -f -- "$cur") ) ;;
+  esac
 }
 
 complete -F _ac_complete ac

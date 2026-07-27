@@ -33,6 +33,50 @@ proj_description() {
   proj_json "$1" | jq -r '.description // ""'
 }
 
+# Accept either the bare service name (postgres) or the full container name
+# (noveum-postgres). `ac <proj> ls` prints the latter, so that is what people
+# naturally copy back into the next command.
+proj_normalize_service() {
+  local proj="$1" name="$2"
+  case "$name" in
+    "$proj"-*) printf '%s' "${name#${proj}-}" ;;
+    *)         printf '%s' "$name" ;;
+  esac
+}
+
+# True if the argument names a service of this project, in either form.
+proj_has_service() {
+  proj_services "$1" | grep -qxF -- "$(proj_normalize_service "$1" "$2")"
+}
+
+# Echo the services an action should apply to: every service when no names are
+# given, otherwise just the named ones, validated so a typo fails loudly
+# instead of silently doing nothing.
+proj_target_services() {
+  local proj="$1"; shift
+  if [ $# -eq 0 ]; then
+    proj_services "$proj"
+    return 0
+  fi
+  local s n all
+  all=$(proj_services "$proj")
+  for s in "$@"; do
+    n=$(proj_normalize_service "$proj" "$s")
+    printf '%s\n' "$all" | grep -qxF -- "$n" \
+      || die "no such service '$s' in project '$proj' (have: $(echo $all))"
+    printf '%s\n' "$n"
+  done
+}
+
+# Same, but as container names, for passing straight to `container <verb>`.
+proj_container_names() {
+  local proj="$1"; shift
+  local svc
+  proj_target_services "$proj" "$@" | while IFS= read -r svc; do
+    [ -n "$svc" ] && svc_container_name "$proj" "$svc"
+  done
+}
+
 # ------------------------------------------------------------ state query ---
 
 # All containers currently known to the daemon, as "<id> <state>" lines.
@@ -65,7 +109,7 @@ ac_running_containers() {
   [ -n "$names" ] || return 0
 
   _all_containers | awk '$2=="running" {print $1}' | while IFS= read -r c; do
-    printf '%s\n' "$names" | grep -qx "$c" && printf '%s\n' "$c"
+    printf '%s\n' "$names" | grep -qxF -- "$c" && printf '%s\n' "$c"
   done
 }
 
@@ -76,7 +120,7 @@ _ensure_volumes() {
   printf '%s' "$svc_json" | jq -r '(.volumes // [])[].name' | while IFS= read -r vol; do
     [ -n "$vol" ] || continue
     full=$(svc_volume_name "$proj" "$vol")
-    if ! container volume ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "$full"; then
+    if ! container volume ls 2>/dev/null | awk 'NR>1 {print $1}' | grep -qxF -- "$full"; then
       container volume create "$full" >/dev/null 2>&1 && dim "  volume $full created"
     fi
   done
@@ -176,19 +220,109 @@ start_service() {
 }
 
 project_start() {
-  local proj="$1" svc
+  local proj="$1"; shift
+  local targets svc
+  # Resolve (and validate) before touching the daemon, so a typo does not
+  # leave a daemon started for nothing.
+  targets=$(proj_target_services "$proj" "$@") || exit 1
+
   daemon_ensure
-  proj_services "$proj" | while IFS= read -r svc; do
+  project_login "$proj"
+  printf '%s\n' "$targets" | while IFS= read -r svc; do
     [ -n "$svc" ] && start_service "$proj" "$svc"
   done
   supervisor_ensure
 }
 
+# Pre-pull every image in the manifest so a later start is fast.
+project_pull() {
+  local proj="$1"; shift
+  local targets svc img
+  targets=$(proj_target_services "$proj" "$@") || exit 1
+  daemon_ensure
+  project_login "$proj"
+  printf '%s\n' "$targets" | while IFS= read -r svc; do
+    [ -n "$svc" ] || continue
+    img=$(proj_service_json "$proj" "$svc" | jq -r '.image')
+    info "pulling $img"
+    container image pull "$img" >/dev/null && ok "$img"
+  done
+}
+
+# Authenticate to any private registries the project declares, before images
+# are pulled. Credentials are never stored in the manifest: `passwordCmd` is an
+# argv that is executed and piped to --password-stdin, which suits tokens that
+# expire (AWS ECR tokens last 12 hours, so this re-runs on every start).
+project_login() {
+  local proj="$1"
+  local n; n=$(proj_json "$proj" | jq '(.registries // []) | length')
+  [ "$n" -gt 0 ] || return 0
+
+  local i=0 server user tmp a
+  while [ "$i" -lt "$n" ]; do
+    server=$(proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].server')
+    user=$(proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].username // "AWS"')
+
+    tmp=$(mktemp)
+    proj_json "$proj" | jq -r --argjson i "$i" '.registries[$i].passwordCmd[]' > "$tmp"
+    local argv=()
+    while IFS= read -r a; do argv+=("$a"); done < "$tmp"
+    rm -f "$tmp"
+
+    info "logging in to $server"
+    if "${argv[@]}" 2>/dev/null \
+        | container registry login --username "$user" --password-stdin "$server" >/dev/null 2>&1; then
+      ok "authenticated to $server"
+    else
+      warn "login to $server failed; pulls of private images will fail"
+    fi
+    i=$((i + 1))
+  done
+}
+
+# Follow (or dump) every service at once, prefixing each line with the service
+# name. `container logs` only handles a single container, so the fan-out and
+# the interleaving are done here, the way `docker compose logs` behaves.
+project_logs_all() {
+  local proj="$1"; shift
+  local svc cname col i=0 pids=""
+  local colors
+  colors=("$C_BLUE" "$C_GREEN" "$C_YELLOW" "$C_RED")
+
+  for svc in $(proj_services "$proj"); do
+    cname=$(svc_container_name "$proj" "$svc")
+    col=${colors[$((i % 4))]}
+    (
+      container logs "$@" "$cname" 2>&1 | while IFS= read -r line; do
+        printf '%s%-11s%s | %s\n' "$col" "$svc" "$C_RESET" "$line"
+      done
+    ) &
+    pids="$pids $!"
+    i=$((i + 1))
+  done
+
+  # Ctrl-C must take the whole fan-out down, not just the foreground wait.
+  trap 'kill $pids 2>/dev/null; exit 0' INT TERM
+  wait
+}
+
+project_images() {
+  local proj="$1" svc
+  printf '%s%-14s %s%s\n' "$C_BOLD" "SERVICE" "IMAGE" "$C_RESET"
+  proj_services "$proj" | while IFS= read -r svc; do
+    [ -n "$svc" ] || continue
+    printf '%-14s %s\n' "$svc" "$(proj_service_json "$proj" "$svc" | jq -r '.image')"
+  done
+}
+
 # ------------------------------------------------------------------- stop ---
 
 project_stop() {
-  local proj="$1" svc cname state any=0
-  proj_services "$proj" | while IFS= read -r svc; do
+  local proj="$1"; shift
+  local targets svc cname state
+  targets=$(proj_target_services "$proj" "$@") || exit 1
+
+  printf '%s\n' "$targets" | while IFS= read -r svc; do
     [ -n "$svc" ] || continue
     cname=$(svc_container_name "$proj" "$svc")
     state=$(container_state "$cname")

@@ -14,15 +14,20 @@ _ac_projects() {
   done | sort -u
 }
 
-_ac_services() {
+_ac_project_file() {
   local proj=$1 d f
   for d in "${XDG_CONFIG_HOME:-$HOME/.config}/ac/projects" "${AC_HOME:-$HOME/scripts/ac}/projects"; do
     f="$d/$proj.json"
-    if [[ -f $f ]]; then
-      jq -r '.services[].name' "$f" 2>/dev/null
-      return
-    fi
+    [[ -f $f ]] && { print -r -- $f; return 0 }
   done
+  return 1
+}
+
+# Bare service names, plus the <project>-<service> form that `ac <p> ls` prints.
+_ac_services() {
+  local proj=$1 f
+  f=$(_ac_project_file $proj) || return
+  jq -r ".services[].name, \"${proj}-\" + .services[].name" "$f" 2>/dev/null
 }
 
 _ac() {
@@ -30,21 +35,38 @@ _ac() {
   commands=(
     'ls:list available projects'
     'projects:list available projects'
-    'status:daemon and project status'
+    'status:daemon, supervisor and all project status'
     'daemon:manage the container daemon'
+    'images:every image in the local store'
+    'df:disk usage for images, containers and volumes'
+    'prune:remove stopped containers and unused images'
     'config:show resolved config'
     'help:show usage'
     'version:show version'
   )
   actions=(
-    'start:start every service'
-    'stop:stop and remove every service'
+    'start:start services'
+    'stop:stop and remove services'
     'restart:stop then start'
-    'status:per-service state'
-    'ps:per-service state'
-    'logs:tail a service log'
+    'ls:per-service state, IP and ports'
+    'ps:per-service state, IP and ports'
+    'status:per-service state, IP and ports'
+    'logs:show or follow logs'
     'exec:run a command in a service'
-    'ip:print container IPs'
+    'sh:interactive shell in a service'
+    'shell:interactive shell in a service'
+    'stats:live resource usage'
+    'inspect:full container JSON'
+    'kill:send a signal'
+    'rm:force remove containers'
+    'cp:copy files to or from a service'
+    'pull:pre-pull images'
+    'images:images this project uses'
+    'port:published port mappings'
+    'ip:container IPs'
+    'env:environment variables'
+    'login:authenticate to private registries'
+    'config:the project manifest'
   )
 
   if (( CURRENT == 2 )); then
@@ -58,13 +80,14 @@ _ac() {
   local first=${words[2]}
 
   if [[ $first == daemon ]]; then
-    (( CURRENT == 3 )) && _values 'daemon action' 'status[show daemon state]' 'stop[stop if ac owns it]'
+    (( CURRENT == 3 )) && _values 'daemon action' \
+      'status[show daemon state and owner]' 'stop[stop it, only if ac started it]'
     return
   fi
 
-  # Reserved words take no further completion.
+  # Global commands take no further arguments.
   case $first in
-    ls|projects|status|config|help|version) return ;;
+    ls|projects|status|config|help|version|images|df|prune) return ;;
   esac
 
   if (( CURRENT == 3 )); then
@@ -72,16 +95,52 @@ _ac() {
     return
   fi
 
-  # `ac <project> logs|exec|ip <service>`
-  if (( CURRENT == 4 )); then
-    case ${words[3]} in
-      logs|exec|ip)
-        local -a svcs
-        svcs=(${(f)"$(_ac_services $first)"})
+  local action=${words[3]}
+  local -a svcs
+  svcs=(${(f)"$(_ac_services $first)"})
+
+  case $action in
+    # Repeatable service lists.
+    start|stop|restart|stats|inspect|rm|pull|port|ip)
+      _describe -t services 'service' svcs
+      ;;
+
+    # Exactly one service, then a free command.
+    exec)
+      if (( CURRENT == 4 )); then
         _describe -t services 'service' svcs
-        ;;
-    esac
-  fi
+      else
+        _command_names -e
+      fi
+      ;;
+
+    sh|shell|env)
+      (( CURRENT == 4 )) && _describe -t services 'service' svcs
+      ;;
+
+    logs)
+      _alternative \
+        'flags:flag:((-f\:"follow log output" -n\:"number of lines" --boot\:"boot log instead of stdio"))' \
+        "services:service:($svcs)"
+      ;;
+
+    kill)
+      if [[ ${words[CURRENT-1]} == (-s|--signal) ]]; then
+        _values 'signal' TERM KILL HUP INT QUIT USR1 USR2
+      else
+        _alternative \
+          'flags:flag:((-s\:"signal to send"))' \
+          "services:service:($svcs)"
+      fi
+      ;;
+
+    cp)
+      # Either side may be svc:/path or a host path.
+      _alternative \
+        "services:service:(${^svcs}:)" \
+        'files:file:_files'
+      ;;
+  esac
 }
 
 _ac "$@"
