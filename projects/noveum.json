@@ -1,13 +1,106 @@
 {
   "name": "noveum",
   "description": "Noveum local backing services, mirrors extras/docker/docker-compose.yml",
+  "root": "/Volumes/Sandisk SSD/career/3. MagicAPI/noveum-app-nextjs",
+  "region": "us-east-1",
+  "builder": {
+    "cpus": 8,
+    "memory": "8g"
+  },
+  "profiles": {
+    "local": {
+      "platform": "linux/arm64",
+      "push": false,
+      "tag": "dev-local",
+      "registry": ""
+    },
+    "dev": {
+      "platform": "linux/amd64",
+      "push": true,
+      "account": "856315922731",
+      "tag": "dev",
+      "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"
+    },
+    "pre-prod": {
+      "platform": "linux/amd64",
+      "push": true,
+      "account": "199362810023",
+      "tag": "preprod",
+      "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"
+    },
+    "prod": {
+      "platform": "linux/amd64",
+      "push": true,
+      "account": "199362810023",
+      "tag": "latest",
+      "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"
+    }
+  },
+  "registries": [
+    {
+      "server": "{{account}}.dkr.ecr.{{region}}.amazonaws.com",
+      "username": "AWS",
+      "passwordCmd": [
+        "aws",
+        "ecr",
+        "get-login-password",
+        "--region",
+        "{{region}}"
+      ]
+    }
+  ],
+  "builds": [
+    {
+      "context": ".",
+      "target": "runner",
+      "buildArgs": {
+        "BUILDKIT_INLINE_CACHE": "1",
+        "NOVAEVAL_CACHEBUST": "{{git.shortSha}}"
+      },
+      "secrets": [
+        {
+          "id": "DOPPLER_TOKEN",
+          "env": "DOPPLER_TOKEN"
+        }
+      ],
+      "name": "web",
+      "dockerfile": "apps/web/Dockerfile",
+      "image": "{{registry}}noveum-app-nextjs",
+      "tags": [
+        "{{tag}}"
+      ]
+    },
+    {
+      "context": ".",
+      "target": "runner",
+      "buildArgs": {
+        "BUILDKIT_INLINE_CACHE": "1",
+        "NOVAEVAL_CACHEBUST": "{{git.shortSha}}"
+      },
+      "secrets": [
+        {
+          "id": "DOPPLER_TOKEN",
+          "env": "DOPPLER_TOKEN"
+        }
+      ],
+      "name": "workers",
+      "dockerfile": "apps/workers/Dockerfile",
+      "image": "{{registry}}noveum-workers",
+      "tags": [
+        "{{version}}-{{git.shortSha}}{{git.dirtySuffix}}",
+        "latest"
+      ]
+    }
+  ],
   "services": [
     {
       "name": "postgres",
       "image": "docker.io/library/postgres:16-alpine",
       "cpus": 2,
       "memory": "1g",
-      "ports": ["5433:5432"],
+      "ports": [
+        "5433:5432"
+      ],
       "env": {
         "POSTGRES_USER": "user",
         "POSTGRES_PASSWORD": "pass",
@@ -15,9 +108,18 @@
         "PGDATA": "/var/lib/postgresql/data/pgdata"
       },
       "volumes": [
-        { "name": "postgres-data", "target": "/var/lib/postgresql/data" }
+        {
+          "name": "postgres-data",
+          "target": "/var/lib/postgresql/data"
+        }
       ],
-      "readyCmd": ["pg_isready", "-U", "user", "-d", "postgres"],
+      "readyCmd": [
+        "pg_isready",
+        "-U",
+        "user",
+        "-d",
+        "postgres"
+      ],
       "readyTimeout": 90
     },
     {
@@ -25,14 +127,24 @@
       "image": "docker.io/clickhouse/clickhouse-server:24-alpine",
       "cpus": 4,
       "memory": "4g",
-      "ports": ["8124:8123", "9000:9000"],
+      "ports": [
+        "8124:8123",
+        "9000:9000"
+      ],
       "env": {
         "CLICKHOUSE_DB": "default"
       },
       "volumes": [
-        { "name": "clickhouse-data", "target": "/var/lib/clickhouse" }
+        {
+          "name": "clickhouse-data",
+          "target": "/var/lib/clickhouse"
+        }
       ],
-      "readyCmd": ["clickhouse-client", "--query", "SELECT 1"],
+      "readyCmd": [
+        "clickhouse-client",
+        "--query",
+        "SELECT 1"
+      ],
       "readyTimeout": 120
     },
     {
@@ -40,11 +152,21 @@
       "image": "docker.io/redis/redis-stack:latest",
       "cpus": 2,
       "memory": "1g",
-      "ports": ["6379:6379", "8001:8001"],
-      "volumes": [
-        { "name": "redis-data", "target": "/data" }
+      "ports": [
+        "6379:6379",
+        "8001:8001"
       ],
-      "readyCmd": ["sh", "-c", "redis-cli ping | grep PONG"],
+      "volumes": [
+        {
+          "name": "redis-data",
+          "target": "/data"
+        }
+      ],
+      "readyCmd": [
+        "sh",
+        "-c",
+        "redis-cli ping | grep PONG"
+      ],
       "readyTimeout": 90
     }
   ]

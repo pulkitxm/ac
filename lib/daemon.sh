@@ -65,7 +65,7 @@ daemon_ensure() {
   info "starting container daemon"
   if [ -n "$app_root" ]; then
     dim "  app root: $app_root"
-    container system start --app-root "$app_root" --timeout "$timeout" >/dev/null \
+    run_cmd container system start --app-root "$app_root" --timeout "$timeout" >/dev/null \
       || die "failed to start container daemon"
   else
     container system start --timeout "$timeout" >/dev/null \
@@ -89,7 +89,7 @@ daemon_release() {
   fi
 
   info "stopping container daemon (ac owned it)"
-  container system stop >/dev/null 2>&1
+  run_cmd container system stop >/dev/null 2>&1
   rm -f "$AC_OWNER_FILE"
   ok "daemon stopped"
 }
