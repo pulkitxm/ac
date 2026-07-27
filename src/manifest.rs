@@ -200,6 +200,11 @@ impl Manifest {
     pub fn build_names(&self) -> Vec<String> {
         self.builds.iter().map(|b| b.name.clone()).collect()
     }
+    pub fn profile_names(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.profiles.keys().map(|k| k.to_string()).collect();
+        v.sort();
+        v
+    }
 }
 
 pub struct Project {
