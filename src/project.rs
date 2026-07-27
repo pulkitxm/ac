@@ -138,7 +138,13 @@ pub fn wait(ctx: &Ctx, proj: &Project, services: &[String], timeout: Option<u64>
     }
 }
 
-fn resource_args(proj: &Project, svc: &Service, cname: &str, ports: bool, volumes: bool) -> Vec<String> {
+fn resource_args(
+    proj: &Project,
+    svc: &Service,
+    cname: &str,
+    ports: bool,
+    volumes: bool,
+) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "--name".into(),
         cname.to_string(),
@@ -173,7 +179,12 @@ fn resource_args(proj: &Project, svc: &Service, cname: &str, ports: bool, volume
 }
 
 fn run_args(proj: &Project, svc: &Service, cname: &str) -> Vec<String> {
-    let mut args: Vec<String> = vec!["run".into(), "-d".into(), "--progress".into(), "none".into()];
+    let mut args: Vec<String> = vec![
+        "run".into(),
+        "-d".into(),
+        "--progress".into(),
+        "none".into(),
+    ];
     args.extend(resource_args(proj, svc, cname, true, true));
     args.push(svc.image.clone());
     args.extend(svc.args.iter().cloned());
@@ -311,7 +322,9 @@ pub fn run_once(
     let status = ctx.container(&args).status()?;
     supervisor::settle(ctx)?;
     if keep {
-        ctx.dim(&format!("  kept as {cname} (remove with: container rm {cname})"));
+        ctx.dim(&format!(
+            "  kept as {cname} (remove with: container rm {cname})"
+        ));
     }
     Ok(status)
 }
@@ -350,7 +363,10 @@ pub fn create(ctx: &Ctx, proj: &Project, services: &[String], recreate: bool) ->
         ensure_volumes(ctx, proj, svc);
         ctx.info(&format!("creating {cname}"));
         if ctx.container(create_args(proj, svc, &cname)).quiet_ok() {
-            ctx.ok(&format!("{cname} created (start with: ac {} start {name})", proj.name));
+            ctx.ok(&format!(
+                "{cname} created (start with: ac {} start {name})",
+                proj.name
+            ));
         } else {
             return Err(anyhow!("failed to create {cname}"));
         }
@@ -373,13 +389,7 @@ pub fn top(ctx: &Ctx, proj: &Project, services: &[String]) -> Result<()> {
             continue;
         }
         let out = ctx
-            .container([
-                "exec",
-                &cname,
-                "sh",
-                "-c",
-                "ps aux 2>/dev/null || ps",
-            ])
+            .container(["exec", &cname, "sh", "-c", "ps aux 2>/dev/null || ps"])
             .stdout()
             .unwrap_or_default();
         if ctx.json {
