@@ -7,7 +7,7 @@ CARGO := $(CARGO_HOME)/bin/cargo
 BIN_DIR  ?= $(HOME)/.local/bin
 BIN_NAME ?= ac
 
-COMPLETION_DIR := completions/rust
+COMPLETION_DIR := completions
 
 .DEFAULT_GOAL := help
 .PHONY: help build dev test lint fmt install completions clean e2e

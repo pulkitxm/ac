@@ -2,6 +2,7 @@
 
 mod build;
 mod cli;
+mod completions;
 mod ctx;
 mod daemon;
 mod manifest;
@@ -138,7 +139,10 @@ fn run(cli: Cli) -> Result<()> {
                 CompletionShell::Elvish => clap_complete::Shell::Elvish,
                 CompletionShell::PowerShell => clap_complete::Shell::PowerShell,
             };
-            clap_complete::generate(sh, &mut cmd, "ac", &mut std::io::stdout());
+            let mut generated = Vec::new();
+            clap_complete::generate(sh, &mut cmd, "ac", &mut generated);
+            let generated = String::from_utf8_lossy(&generated).into_owned();
+            print!("{}", completions::with_dynamic_projects(shell, &generated));
             Ok(())
         }
         TopCommand::Ls => cmd_ls(&ctx),
