@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # project.sh - turn a declarative project manifest into running containers.
 #
-# A project is a JSON file (see projects/novasynth.json). Adding a new project
+# A project is a JSON file (see projects/noveum.json). Adding a new project
 # is just dropping another JSON file into projects/ or ~/.config/ac/projects/;
 # no code changes are needed.
 
@@ -161,7 +161,14 @@ start_service() {
 
   info "starting $cname"
   if ! container "${args[@]}" >/dev/null; then
-    die "failed to start $cname"
+    # `container run` sometimes reports a spurious "not found" while the
+    # container is in fact created and running, so trust observed state over
+    # the exit code before giving up.
+    sleep 2
+    if [ "$(container_state "$cname")" != "running" ]; then
+      die "failed to start $cname"
+    fi
+    dim "  $cname reported an error but is running; continuing"
   fi
 
   _wait_ready "$cname" "$svc_json"
