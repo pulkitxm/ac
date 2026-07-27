@@ -35,6 +35,42 @@ export AC_HOME
 require jq
 require container
 
+# Only request a TTY when we actually have one, otherwise the runtime rejects
+# the exec with ENODEV (e.g. in scripts and CI).
+_tty_flags() {
+  if [ -t 0 ] && [ -t 1 ]; then printf -- '-i -t'; else printf -- '-i'; fi
+}
+
+# Turn `svc:/path` into `<project>-<svc>:/path`; leave host paths untouched.
+_cp_path() {
+  local proj="$1" arg="$2"
+  case "$arg" in
+    */*:*|/*) printf '%s' "$arg"; return ;;   # looks like a host path
+    *:*)
+      local svc="${arg%%:*}" path="${arg#*:}"
+      if proj_has_service "$proj" "$svc"; then
+        printf '%s:%s' "$(svc_container_name "$proj" "$svc")" "$path"
+        return
+      fi
+      ;;
+  esac
+  printf '%s' "$arg"
+}
+
+# Split arguments into flags (leading dash) and service names, so actions can
+# accept both without flags tripping service validation.
+_AC_FLAGS=(); _AC_SVCS=()
+_split_args() {
+  _AC_FLAGS=(); _AC_SVCS=()
+  local a
+  for a in "$@"; do
+    case "$a" in
+      -*) _AC_FLAGS+=("$a") ;;
+      *)  _AC_SVCS+=("$a") ;;
+    esac
+  done
+}
+
 usage() {
   cat <<EOF
 ${C_BOLD}ac${C_RESET} - Apple Container project runner (v$AC_VERSION)
@@ -43,20 +79,35 @@ ${C_BOLD}USAGE${C_RESET}
   ac <project> <action> [args]
   ac <command>
 
-${C_BOLD}PROJECT ACTIONS${C_RESET}
-  start                 start every service in the project
-  stop                  stop and remove them
-  restart               stop then start
-  status, ps            per-service state, IP and published ports
-  logs <service>        tail a service's logs
-  exec <service> <cmd>  run a command inside a service
-  ip [service]          print container IPs
+${C_BOLD}PROJECT ACTIONS${C_RESET}  (most take optional service names; default is all)
+  start [svc...]        start services
+  stop [svc...]         stop and remove services
+  restart [svc...]      stop then start
+  ls, ps, status        per-service state, IP and published ports
+  logs [-f] [-n N] <svc>  show logs (-f follows, --boot for the boot log)
+  exec <svc> <cmd...>   run a command inside a service
+  sh, shell [svc]       interactive shell inside a service
+  stats [svc...]        live resource usage
+  inspect [svc...]      full container JSON
+  kill [-s SIG] [svc..] send a signal (default KILL)
+  rm [svc...]           force remove containers, leaving volumes
+  cp <src> <dst>        copy files; use svc:/path for the container side
+  pull [svc...]         pre-pull images
+  images                images this project uses
+  port [svc]            published port mappings
+  ip [svc]              container IPs
+  env <svc>             environment variables from the manifest
+  login                 authenticate to the project's private registries
+  config                the project manifest
 
 ${C_BOLD}COMMANDS${C_RESET}
   ls, projects          list available projects
   status                daemon + all project status
   daemon status         show daemon state and who owns it
   daemon stop           stop the daemon (only if ac started it)
+  images                every image in the local store
+  df                    disk usage for images, containers and volumes
+  prune                 remove stopped containers and unused images
   config                show resolved config
   help, version
 
@@ -97,6 +148,17 @@ main() {
     config)           cat "$AC_CONFIG_FILE"; return 0 ;;
     status)           cmd_global_status; return 0 ;;
     __supervise)      supervisor_loop; return 0 ;;
+    images)           daemon_ensure; container image ls; return 0 ;;
+    df)               daemon_ensure; container system df; return 0 ;;
+    prune)
+      daemon_ensure
+      info "removing stopped containers"
+      container prune 2>&1 | tail -3
+      info "removing unused images"
+      container image prune 2>&1 | tail -3
+      supervisor_settle
+      return 0
+      ;;
     daemon)
       case "${2:-status}" in
         status) daemon_status_line ;;
@@ -113,34 +175,103 @@ main() {
   shift 2 2>/dev/null || shift 1
 
   case "$action" in
-    start)    project_start "$proj" ;;
-    stop)     project_stop "$proj" ;;
-    restart)  project_stop "$proj"; project_start "$proj" ;;
-    status|ps) project_status "$proj" ;;
+    start)    project_start "$proj" "$@" ;;
+    stop)     project_stop "$proj" "$@" ;;
+    restart)  project_stop "$proj" "$@"; project_start "$proj" "$@" ;;
+    ls|ps|status) project_status "$proj" ;;
+    pull)     project_pull "$proj" "$@" ;;
+    images)   project_images "$proj" ;;
+    config)   proj_json "$proj" ;;
+    login)    daemon_ensure; project_login "$proj" ;;
+
     logs)
-      [ $# -ge 1 ] || die "usage: ac $proj logs <service>"
-      container logs "$(svc_container_name "$proj" "$1")"
+      # Flags and the service name may appear in any order, so pick out the
+      # first argument that names a service and pass the rest through.
+      local lsvc="" lflags=() a
+      for a in "$@"; do
+        if [ -z "$lsvc" ] && proj_has_service "$proj" "$a"; then
+          lsvc=$(proj_normalize_service "$proj" "$a")
+        else
+          lflags+=("$a")
+        fi
+      done
+      if [ -z "$lsvc" ]; then
+        # No service named: interleave every service, like docker compose.
+        project_logs_all "$proj" ${lflags[@]+"${lflags[@]}"}
+      else
+        container logs ${lflags[@]+"${lflags[@]}"} "$(svc_container_name "$proj" "$lsvc")"
+      fi
       ;;
+
     exec)
       [ $# -ge 2 ] || die "usage: ac $proj exec <service> <command...>"
-      local svc="$1"; shift
-      # Only request a TTY when we actually have one, otherwise the runtime
-      # rejects the exec with ENODEV (e.g. in scripts and CI).
-      local tty_flags=(-i)
-      [ -t 0 ] && [ -t 1 ] && tty_flags=(-i -t)
-      container exec "${tty_flags[@]}" "$(svc_container_name "$proj" "$svc")" "$@"
+      local svc; svc=$(proj_normalize_service "$proj" "$1"); shift
+      container exec $(_tty_flags) "$(svc_container_name "$proj" "$svc")" "$@"
       ;;
+
+    sh|shell)
+      local ssvc; ssvc=$(proj_normalize_service "$proj" "${1:-$(proj_services "$proj" | head -1)}")
+      container exec $(_tty_flags) "$(svc_container_name "$proj" "$ssvc")" \
+        sh -c 'command -v bash >/dev/null && exec bash || exec sh'
+      ;;
+
+    stats)
+      _split_args "$@"
+      local names; names=$(proj_container_names "$proj" ${_AC_SVCS[@]+"${_AC_SVCS[@]}"}) || exit 1
+      container stats ${_AC_FLAGS[@]+"${_AC_FLAGS[@]}"} $(printf '%s ' $names)
+      ;;
+
+    inspect)
+      _split_args "$@"
+      local names; names=$(proj_container_names "$proj" ${_AC_SVCS[@]+"${_AC_SVCS[@]}"}) || exit 1
+      container inspect $(printf '%s ' $names)
+      ;;
+
+    kill)
+      local sig="KILL"
+      if [ "${1:-}" = "-s" ] || [ "${1:-}" = "--signal" ]; then sig="$2"; shift 2; fi
+      local names; names=$(proj_container_names "$proj" "$@") || exit 1
+      container kill --signal "$sig" $(printf '%s ' $names)
+      ;;
+
+    rm)
+      local names; names=$(proj_container_names "$proj" "$@") || exit 1
+      container rm --force $(printf '%s ' $names)
+      supervisor_settle
+      ;;
+
+    cp)
+      # Rewrite `svc:/path` into `<project>-<svc>:/path` on either side.
+      [ $# -eq 2 ] || die "usage: ac $proj cp <src> <dst>   (use svc:/path for the container)"
+      container cp "$(_cp_path "$proj" "$1")" "$(_cp_path "$proj" "$2")"
+      ;;
+
+    port)
+      local s
+      proj_target_services "$proj" "$@" | while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        printf '%-14s %s\n' "$s" \
+          "$(proj_service_json "$proj" "$s" | jq -r '(.ports // []) | join(", ")')"
+      done
+      ;;
+
+    env)
+      [ $# -ge 1 ] || die "usage: ac $proj env <service>"
+      proj_service_json "$proj" "$(proj_normalize_service "$proj" "$1")" | jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"'
+      ;;
+
     ip)
       if [ $# -ge 1 ]; then
-        container_ip "$(svc_container_name "$proj" "$1")"
+        container_ip "$(svc_container_name "$proj" "$(proj_normalize_service "$proj" "$1")")"
       else
         local s
         proj_services "$proj" | while IFS= read -r s; do
           [ -n "$s" ] || continue
-          printf '%-22s %s\n' "$s" "$(container_ip "$(svc_container_name "$proj" "$s")")"
+          printf '%-14s %s\n' "$s" "$(container_ip "$(svc_container_name "$proj" "$s")")"
         done
       fi
       ;;
+
     *) die "unknown action: $action (try: ac help)" ;;
   esac
 }
