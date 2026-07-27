@@ -333,8 +333,34 @@ pub enum Action {
         services: Vec<String>,
     },
 
-    /// Images this project's services use, from the manifest.
-    Images,
+    /// Inspect and manage the images this project uses.
+    ///
+    /// With no subcommand this lists them, so `ac noveum images` keeps
+    /// working. The subcommands act on the local image store.
+    ///
+    /// Examples:
+    ///   ac noveum images
+    ///   ac noveum images rm redis
+    ///   ac noveum images prune
+    Images {
+        #[command(subcommand)]
+        action: Option<ImagesAction>,
+    },
+
+    /// Inspect and manage the named volumes this project declares.
+    ///
+    /// Volumes hold the data that survives `down` and `rm`, so removing one is
+    /// the only destructive operation in ac. With no subcommand this lists
+    /// them.
+    ///
+    /// Examples:
+    ///   ac noveum volumes
+    ///   ac noveum volumes rm postgres-data
+    ///   ac noveum volumes prune
+    Volumes {
+        #[command(subcommand)]
+        action: Option<VolumesAction>,
+    },
 
     /// Published port mappings declared in the manifest.
     Port {
@@ -501,3 +527,61 @@ pub const RESERVED: &[&str] = &[
     "help",
     "__supervise",
 ];
+
+#[derive(Debug, Subcommand)]
+pub enum ImagesAction {
+    /// List the images this project's services and builds declare.
+    ///
+    /// Reads the manifest, so it works with the daemon stopped.
+    Ls,
+
+    /// Remove this project's images from the local store.
+    ///
+    /// Resolves each name through the manifest, so `redis` means whatever
+    /// image the redis service declares. Empty means every image the project
+    /// declares. Runs `container image rm` per image.
+    ///
+    /// Examples:
+    ///   ac noveum images rm redis
+    ///   ac noveum images rm
+    Rm {
+        /// Services or builds whose images to remove. Empty means all.
+        names: Vec<String>,
+    },
+
+    /// Remove images this project declares that no container is using.
+    ///
+    /// Runs `container image prune`, then reports what the project still has.
+    Prune,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum VolumesAction {
+    /// List the volumes this project declares, and whether they exist yet.
+    ///
+    /// Reads the manifest for the declared set and the daemon for what is
+    /// actually present.
+    Ls,
+
+    /// Delete this project's volumes. THIS DESTROYS THE DATA IN THEM.
+    ///
+    /// Names are the manifest names, so `postgres-data` means the volume the
+    /// manifest calls postgres-data, stored as `<project>-postgres-data`.
+    /// Empty means every volume the project declares.
+    ///
+    /// Examples:
+    ///   ac noveum volumes rm postgres-data
+    Rm {
+        /// Volumes to delete. Empty means all of this project's volumes.
+        names: Vec<String>,
+    },
+
+    /// Show the daemon's full JSON for this project's volumes.
+    Inspect {
+        /// Volumes to inspect. Empty means all of this project's volumes.
+        names: Vec<String>,
+    },
+
+    /// Remove volumes no container references, across the whole daemon.
+    Prune,
+}

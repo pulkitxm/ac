@@ -14,12 +14,10 @@ use crate::state::Snapshot;
 use crate::style;
 use crate::{daemon, supervisor};
 
-fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
-    if svc.volumes.is_empty() {
-        return;
-    }
-    let existing = ctx
-        .container(["volume", "ls", "--format", "json"])
+/// Volume names the daemon currently has. The daemon reports these as `id`,
+/// with the same string under `configuration.name`.
+pub fn existing_volumes(ctx: &Ctx) -> Vec<String> {
+    ctx.container(["volume", "ls", "--format", "json"])
         .silent()
         .stdout()
         .ok()
@@ -28,12 +26,28 @@ fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
             v.as_array()
                 .map(|a| {
                     a.iter()
-                        .filter_map(|e| e.get("id").and_then(|x| x.as_str()).map(String::from))
+                        .filter_map(|e| {
+                            e.get("id")
+                                .and_then(|x| x.as_str())
+                                .or_else(|| {
+                                    e.get("configuration")
+                                        .and_then(|c| c.get("name"))
+                                        .and_then(|x| x.as_str())
+                                })
+                                .map(String::from)
+                        })
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn ensure_volumes(ctx: &Ctx, proj: &Project, svc: &Service) {
+    if svc.volumes.is_empty() {
+        return;
+    }
+    let existing = existing_volumes(ctx);
 
     for vol in &svc.volumes {
         let full = proj.volume_name(&vol.name);

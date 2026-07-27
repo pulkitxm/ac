@@ -19,7 +19,7 @@ use anyhow::{anyhow, Result};
 use clap::{CommandFactory, Parser};
 
 use crate::build::{vars_for, BuildOverrides};
-use crate::cli::{Action, Cli, CompletionShell, DaemonAction, TopCommand, RESERVED};
+use crate::cli::{Action, Cli, CompletionShell, DaemonAction, ImagesAction, TopCommand, VolumesAction, RESERVED};
 use crate::ctx::Ctx;
 use crate::manifest::Project;
 use crate::state::Snapshot;
@@ -89,7 +89,9 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
     }
 
     let Some(first) = rest.get(i) else {
-        out.extend(rest.iter().cloned());
+        // The leading global flags are already in `out`; copying from 0 here
+        // would duplicate them and clap rejects a repeated flag.
+        out.extend(rest[i..].iter().cloned());
         return Ok(out);
     };
 
@@ -468,21 +470,203 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
 
         Action::Pull { services } => project::pull(ctx, proj, services),
 
-        Action::Images => {
-            if ctx.json {
-                let items: Vec<serde_json::Value> = proj
+        Action::Images { action } => {
+            let list = || -> Vec<(String, String)> {
+                let mut v: Vec<(String, String)> = proj
                     .manifest
                     .services
                     .iter()
-                    .map(|s| serde_json::json!({ "service": s.name, "image": s.image }))
+                    .map(|s| (s.name.clone(), s.image.clone()))
                     .collect();
-                return ctx.emit_json(&serde_json::Value::Array(items));
+                v.extend(
+                    proj.manifest
+                        .builds
+                        .iter()
+                        .map(|b| (b.name.clone(), b.image.clone())),
+                );
+                v
+            };
+
+            match action.as_ref().unwrap_or(&ImagesAction::Ls) {
+                ImagesAction::Ls => {
+                    let rows = list();
+                    if ctx.json {
+                        let items: Vec<serde_json::Value> = rows
+                            .iter()
+                            .map(|(n, i)| serde_json::json!({ "name": n, "image": i }))
+                            .collect();
+                        return ctx.emit_json(&serde_json::Value::Array(items));
+                    }
+                    println!("{}", style::bold(&format!("{:<14} {}", "NAME", "IMAGE")));
+                    for (n, i) in rows {
+                        println!("{n:<14} {i}");
+                    }
+                    Ok(())
+                }
+
+                ImagesAction::Rm { names } => {
+                    daemon::ensure(ctx)?;
+                    let rows = list();
+                    let targets: Vec<(String, String)> = if names.is_empty() {
+                        rows
+                    } else {
+                        let mut out = Vec::new();
+                        for want in names {
+                            let hit = rows.iter().find(|(n, _)| {
+                                n == want || format!("{}-{}", proj.name, n) == *want
+                            });
+                            match hit {
+                                Some(r) => out.push(r.clone()),
+                                None => {
+                                    let known: Vec<&str> =
+                                        rows.iter().map(|(n, _)| n.as_str()).collect();
+                                    return Err(anyhow!(
+                                        "no service or build named '{want}' in project '{}'\n  have: {}",
+                                        proj.name,
+                                        known.join(" ")
+                                    ));
+                                }
+                            }
+                        }
+                        out
+                    };
+
+                    let mut failed = 0;
+                    for (name, image) in &targets {
+                        ctx.info(&format!("removing image for {name}"));
+                        if ctx.container(["image", "rm", image]).status().is_err() {
+                            ctx.warn(&format!("could not remove {image}"));
+                            failed += 1;
+                        }
+                    }
+                    if failed > 0 {
+                        return Err(anyhow!("{failed} image(s) could not be removed"));
+                    }
+                    supervisor::settle(ctx)
+                }
+
+                ImagesAction::Prune => {
+                    daemon::ensure(ctx)?;
+                    ctx.info("removing unused images");
+                    ctx.container(["image", "prune"]).status()?;
+                    supervisor::settle(ctx)
+                }
             }
-            println!("{}", style::bold(&format!("{:<14} {}", "SERVICE", "IMAGE")));
-            for s in &proj.manifest.services {
-                println!("{:<14} {}", s.name, s.image);
+        }
+
+        Action::Volumes { action } => {
+            let declared: Vec<(String, String)> = proj
+                .manifest
+                .services
+                .iter()
+                .flat_map(|s| s.volumes.iter())
+                .map(|v| (v.name.clone(), proj.volume_name(&v.name)))
+                .collect();
+
+            let resolve = |names: &Vec<String>| -> Result<Vec<(String, String)>> {
+                if names.is_empty() {
+                    return Ok(declared.clone());
+                }
+                let mut out = Vec::new();
+                for want in names {
+                    match declared
+                        .iter()
+                        .find(|(short, full)| short == want || full == want)
+                    {
+                        Some(v) => out.push(v.clone()),
+                        None => {
+                            let known: Vec<&str> =
+                                declared.iter().map(|(s, _)| s.as_str()).collect();
+                            return Err(anyhow!(
+                                "no volume named '{want}' in project '{}'\n  have: {}",
+                                proj.name,
+                                known.join(" ")
+                            ));
+                        }
+                    }
+                }
+                Ok(out)
+            };
+
+            match action.as_ref().unwrap_or(&VolumesAction::Ls) {
+                VolumesAction::Ls => {
+                    let present = daemon::running(ctx);
+                    let existing: Vec<String> = if present {
+                        project::existing_volumes(ctx)
+                    } else {
+                        Vec::new()
+                    };
+
+                    let state = |full: &str| -> &'static str {
+                        if !present {
+                            "unknown"
+                        } else if existing.iter().any(|e| e == full) {
+                            "present"
+                        } else {
+                            "absent"
+                        }
+                    };
+
+                    if ctx.json {
+                        let items: Vec<serde_json::Value> = declared
+                            .iter()
+                            .map(|(short, full)| {
+                                serde_json::json!({
+                                    "name": short,
+                                    "volume": full,
+                                    "state": state(full),
+                                })
+                            })
+                            .collect();
+                        return ctx.emit_json(&serde_json::Value::Array(items));
+                    }
+                    if !present {
+                        ctx.warn("container daemon is not running, existence is unknown");
+                    }
+                    println!(
+                        "{}",
+                        style::bold(&format!("{:<16} {:<26} {}", "NAME", "VOLUME", "STATE"))
+                    );
+                    for (short, full) in &declared {
+                        println!("{short:<16} {full:<26} {}", state(full));
+                    }
+                    Ok(())
+                }
+
+                VolumesAction::Rm { names } => {
+                    daemon::ensure(ctx)?;
+                    let targets = resolve(names)?;
+                    let mut failed = 0;
+                    for (short, full) in &targets {
+                        ctx.info(&format!("deleting volume {short} ({full})"));
+                        if ctx.container(["volume", "delete", full]).status().is_err() {
+                            ctx.warn(&format!("could not delete {full}"));
+                            failed += 1;
+                        }
+                    }
+                    if failed > 0 {
+                        return Err(anyhow!("{failed} volume(s) could not be deleted"));
+                    }
+                    supervisor::settle(ctx)
+                }
+
+                VolumesAction::Inspect { names } => {
+                    daemon::ensure(ctx)?;
+                    let targets = resolve(names)?;
+                    let mut args: Vec<String> =
+                        vec!["volume".into(), "inspect".into()];
+                    args.extend(targets.iter().map(|(_, full)| full.clone()));
+                    ctx.container(args).status()?;
+                    Ok(())
+                }
+
+                VolumesAction::Prune => {
+                    daemon::ensure(ctx)?;
+                    ctx.info("removing volumes with no container references");
+                    ctx.container(["volume", "prune"]).status()?;
+                    supervisor::settle(ctx)
+                }
             }
-            Ok(())
         }
 
         Action::Port { services } => {
@@ -648,6 +832,33 @@ fn exit_like(status: std::process::ExitStatus) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn global_flags_alone_are_not_duplicated() {
+        let argv: Vec<String> = ["ac", "--json"].iter().map(|s| s.to_string()).collect();
+        let out = rewrite_argv(&argv).expect("rewrite");
+        assert_eq!(out, vec!["ac", "--json"], "flags must not be repeated");
+    }
+
+    #[test]
+    fn several_global_flags_alone_survive_once_each() {
+        let argv: Vec<String> = ["ac", "--json", "--quiet", "--no-color"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = rewrite_argv(&argv).expect("rewrite");
+        assert_eq!(out, vec!["ac", "--json", "--quiet", "--no-color"]);
+    }
+
+    #[test]
+    fn global_flags_before_a_project_are_kept_once() {
+        let argv: Vec<String> = ["ac", "--json", "noveum", "ls"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = rewrite_argv(&argv).expect("rewrite");
+        assert_eq!(out, vec!["ac", "--json", "project", "noveum", "ls"]);
+    }
+
     use super::*;
 
     fn proj_fixture() -> Project {
