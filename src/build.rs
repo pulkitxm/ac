@@ -427,16 +427,24 @@ impl<'a> Reporter<'a> {
         }
     }
 
+    fn label(&self) -> String {
+        if self.name.is_empty() {
+            String::new()
+        } else {
+            format!("[{}] ", self.name)
+        }
+    }
+
     fn info(&self, msg: &str) {
-        self.println(format!("{} [{}] {msg}", style::blue("==>"), self.name));
+        self.println(format!("{} {}{msg}", style::blue("==>"), self.label()));
     }
 
     fn ok(&self, msg: &str) {
-        self.println(format!("{} [{}] {msg}", style::green("  ok"), self.name));
+        self.println(format!("{} {}{msg}", style::green("ok"), self.label()));
     }
 
     fn dim(&self, msg: &str) {
-        self.println(style::dim(&format!("  [{}] {msg}", self.name)));
+        self.println(style::dim(&format!("{}{msg}", self.label())));
     }
 
     fn phase(&self, phase: &str) {
@@ -449,19 +457,19 @@ impl<'a> Reporter<'a> {
         let pos = fin.position();
         let line = if let Some(err) = &fin.error {
             format!(
-                "{} [{}] {pos}{}  {}",
-                style::red("   x"),
-                self.name,
+                "{} {}{pos}{}  {}",
+                style::red("x"),
+                self.label(),
                 fin.label,
                 err
             )
         } else if fin.cached {
-            style::dim(&format!("   - [{}] {pos}{}  cached", self.name, fin.label))
+            style::dim(&format!("- {}{pos}{}  cached", self.label(), fin.label))
         } else {
             format!(
-                "{} [{}] {pos}{}  {}",
-                style::green("   +"),
-                self.name,
+                "{} {}{pos}{}  {}",
+                style::green("+"),
+                self.label(),
                 fin.label,
                 fin.secs.map(fmt_secs).unwrap_or_default()
             )
@@ -498,12 +506,12 @@ impl<'a> Reporter<'a> {
             return;
         }
         self.println(style::dim(&format!(
-            "  [{}] last {} output lines:",
-            self.name,
+            "{}last {} output lines:",
+            self.label(),
             tail.len() - start
         )));
         for l in &tail[start..] {
-            self.println(style::dim(&format!("  [{}] {l}", self.name)));
+            self.println(style::dim(&format!("{}{l}", self.label())));
         }
     }
 
@@ -579,7 +587,7 @@ fn run_hooks(
             continue;
         }
         let argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
-        rep.dim(&format!("{key}: {}", argv.join(" ")));
+        rep.info(key);
         rep.phase(&format!("{key}: {}", argv[0]));
         let runner = rep
             .ctx
@@ -588,9 +596,9 @@ fn run_hooks(
             .envs(env.to_vec());
         let ok = rep
             .run(runner)
-            .map_err(|e| anyhow!("[{}] {key} could not run: {e}", rep.name))?;
+            .map_err(|e| anyhow!("{}{key} could not run: {e}", rep.label()))?;
         if !ok {
-            return Err(anyhow!("[{}] {key} failed: {}", rep.name, argv.join(" ")));
+            return Err(anyhow!("{}{key} failed: {}", rep.label(), argv.join(" ")));
         }
     }
     Ok(())
@@ -856,7 +864,7 @@ fn run_rollout_hooks(
     if hooks.is_empty() {
         return Ok(());
     }
-    let rep = Reporter::new(ctx, "rollout", Mode::Inherit, None, None);
+    let rep = Reporter::new(ctx, "", Mode::Inherit, None, None);
     let env = hook_env(proj, v, root, builds);
     run_hooks(&rep, root, key, hooks, v, &env)
 }

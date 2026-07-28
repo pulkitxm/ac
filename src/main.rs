@@ -35,7 +35,7 @@ fn main() -> ExitCode {
     let rewritten = match rewrite_argv(&argv) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("{} {e}", style::red(" err"));
+            eprintln!("{} {e}", style::red("err"));
             return ExitCode::FAILURE;
         }
     };
@@ -45,7 +45,7 @@ fn main() -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("{} {e}", style::red(" err"));
+            eprintln!("{} {e}", style::red("err"));
             ExitCode::FAILURE
         }
     }

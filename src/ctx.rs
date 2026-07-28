@@ -154,7 +154,7 @@ impl Ctx {
         self.out(&format!("{} {msg}", style::blue("==>")));
     }
     pub fn ok(&self, msg: &str) {
-        self.out(&format!("{} {msg}", style::green("  ok")));
+        self.out(&format!("{} {msg}", style::green("ok")));
     }
     pub fn dim(&self, msg: &str) {
         self.out(&style::dim(msg));
@@ -163,7 +163,7 @@ impl Ctx {
         eprintln!("{} {msg}", style::yellow("warn"));
     }
     pub fn err(&self, msg: &str) {
-        eprintln!("{} {msg}", style::red(" err"));
+        eprintln!("{} {msg}", style::red("err"));
     }
 
     pub fn emit_json(&self, v: &serde_json::Value) -> Result<()> {
@@ -252,7 +252,7 @@ impl<'a> Runner<'a> {
         if self.silent || self.ctx.quiet {
             return;
         }
-        eprintln!("{}", style::dim_err(&format!("   $ {}", self.display())));
+        eprintln!("{}", style::dim_err(&format!("$ {}", self.display())));
     }
 
     fn build(&self) -> Command {
