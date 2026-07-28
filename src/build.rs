@@ -326,7 +326,6 @@ pub fn ensure_builder(ctx: &Ctx, want_cpus: Option<u32>, want_mem: Option<&str>)
 
     let Ok(text) = ctx
         .container(["builder", "status", "--format", "json"])
-        .silent()
         .stdout()
     else {
         return;
@@ -394,6 +393,7 @@ fn output_mode(ctx: &Ctx, ov: &BuildOverrides, count: usize) -> Mode {
 struct Reporter<'a> {
     ctx: &'a Ctx,
     name: String,
+    width: usize,
     mode: Mode,
     multi: Option<&'a MultiProgress>,
     bar: Option<ProgressBar>,
@@ -411,11 +411,17 @@ impl<'a> Reporter<'a> {
         Reporter {
             ctx,
             name: name.to_string(),
+            width: name.len(),
             mode,
             multi,
             bar,
             tracker: Arc::new(Mutex::new(Tracker::new())),
         }
+    }
+
+    fn padded_to(mut self, width: usize) -> Self {
+        self.width = width;
+        self
     }
 
     fn println(&self, line: String) {
@@ -427,11 +433,18 @@ impl<'a> Reporter<'a> {
         }
     }
 
+    fn echo(&self, runner: &Runner<'_>) {
+        if self.ctx.quiet {
+            return;
+        }
+        self.println(style::dim_err(&format!("$ {}", runner.display())));
+    }
+
     fn label(&self) -> String {
         if self.name.is_empty() {
             String::new()
         } else {
-            format!("[{}] ", self.name)
+            format!("{:<w$} ", format!("[{}]", self.name), w = self.width + 2)
         }
     }
 
@@ -490,7 +503,7 @@ impl<'a> Reporter<'a> {
             Mode::Stream | Mode::Inherit => {
                 self.println(format!(
                     "{} {line}",
-                    style::dim(&format!("{:>12} |", self.name))
+                    style::dim(&format!("{:<w$} |", self.name, w = self.width))
                 ));
             }
         }
@@ -516,6 +529,13 @@ impl<'a> Reporter<'a> {
     }
 
     fn run(&self, runner: Runner<'_>) -> Result<bool> {
+        let runner = if self.multi.is_some() {
+            self.echo(&runner);
+            runner.silent()
+        } else {
+            runner
+        };
+
         if self.mode == Mode::Inherit {
             return Ok(runner.status()?.success());
         }
@@ -549,6 +569,10 @@ impl<'a> Reporter<'a> {
         }
         Ok(child.wait()?.success())
     }
+}
+
+fn name_width(entries: &[Build]) -> usize {
+    entries.iter().map(|b| b.name.len()).max().unwrap_or(0)
 }
 
 fn spawn_ticker(reporters: &[&Reporter<'_>]) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
@@ -1155,8 +1179,11 @@ fn run_fancy(
     parallel: bool,
 ) -> Vec<Outcome> {
     let multi = MultiProgress::new();
-    let bar_style = ProgressStyle::with_template("{spinner:.cyan} {prefix:>12} {wide_msg}")
-        .unwrap_or_else(|_| ProgressStyle::default_spinner());
+    let width = name_width(entries);
+    let bar_style = ProgressStyle::with_template(&format!(
+        "{{spinner:.cyan}} {{prefix:<{width}}} {{wide_msg}}"
+    ))
+    .unwrap_or_else(|_| ProgressStyle::default_spinner());
 
     let reporters: Vec<Reporter<'_>> = entries
         .iter()
@@ -1166,7 +1193,7 @@ fn run_fancy(
             bar.set_prefix(b.name.clone());
             bar.set_message("starting");
             bar.enable_steady_tick(Duration::from_millis(120));
-            Reporter::new(ctx, &b.name, Mode::Fancy, Some(&multi), Some(bar))
+            Reporter::new(ctx, &b.name, Mode::Fancy, Some(&multi), Some(bar)).padded_to(width)
         })
         .collect();
 
@@ -1264,6 +1291,7 @@ fn run_basic(
     progress: Option<&str>,
     mode: Mode,
 ) -> Vec<Outcome> {
+    let width = name_width(entries);
     let run_one = |rep: &Reporter<'_>, b: &Build| -> Outcome {
         let res = build_one(rep, proj, root, b, ov, vars, progress);
         let (steps_done, steps_cached, secs) = rep
@@ -1305,7 +1333,7 @@ fn run_basic(
                 .iter()
                 .map(|b| {
                     scope.spawn(move || {
-                        let rep = Reporter::new(ctx, &b.name, mode, None, None);
+                        let rep = Reporter::new(ctx, &b.name, mode, None, None).padded_to(width);
                         run_one(&rep, b)
                     })
                 })
@@ -1316,7 +1344,7 @@ fn run_basic(
         entries
             .iter()
             .map(|b| {
-                let rep = Reporter::new(ctx, &b.name, mode, None, None);
+                let rep = Reporter::new(ctx, &b.name, mode, None, None).padded_to(width);
                 run_one(&rep, b)
             })
             .collect()
