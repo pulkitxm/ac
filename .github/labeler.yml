@@ -1,0 +1,33 @@
+area:core:
+  - changed-files:
+      - any-glob-to-any-file:
+          - src/**
+          - Cargo.toml
+
+area:docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - docs/**
+          - '**/*.md'
+
+area:tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - tests/**
+
+area:projects:
+  - changed-files:
+      - any-glob-to-any-file:
+          - projects/**
+
+area:ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - .github/**
+          - Makefile
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - Cargo.toml
+          - Cargo.lock

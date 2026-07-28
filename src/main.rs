@@ -118,9 +118,7 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
             .filter(|c| !c.starts_with("__"))
             .collect();
         let hint = if cli::PROJECT_ACTIONS.contains(&first.as_str()) {
-            format!(
-                "\n  '{first}' is a project action: try `ac <project> {first} ...`"
-            )
+            format!("\n  '{first}' is a project action: try `ac <project> {first} ...`")
         } else {
             String::new()
         };
