@@ -1,6 +1,10 @@
-export CARGO_HOME  := /Volumes/External/.toolchains/cargo
-export RUSTUP_HOME := /Volumes/External/.toolchains/rustup
-export PATH        := $(CARGO_HOME)/bin:$(PATH)
+-include Makefile.local
+
+CARGO_HOME  ?= $(HOME)/.cargo
+RUSTUP_HOME ?= $(HOME)/.rustup
+export CARGO_HOME
+export RUSTUP_HOME
+export PATH := $(CARGO_HOME)/bin:$(PATH)
 
 CARGO := $(CARGO_HOME)/bin/cargo
 
