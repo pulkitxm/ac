@@ -47,6 +47,8 @@ echo with `--quiet` or AC_QUIET=1.
 | docker cp | ac \<project\> cp svc:/path ./local |
 | docker build | ac \<project\> build |
 | docker push | ac \<project\> push -P \<profile\> |
+| docker build && push && kubectl rollout | ac \<project\> build --rollout -P \<profile\> |
+| kubectl rollout restart (after a push) | ac \<project\> rollout -P \<profile\> |
 | docker export | ac \<project\> export svc (service must be stopped) |
 | docker ps [-a] [-q] | ac ps [-a] [-q] (table includes project and service) |
 | docker images | ac image ls (sizes shown by default) |
@@ -125,6 +127,53 @@ The build root prefers, in order: `--root`, `$AC_ROOT`, the git worktree
 containing $PWD when it holds the first declared dockerfile, `$PWD` outside
 git repos when it holds every dockerfile, the manifest `root`, `$PWD`. So
 running a build from inside a worktree builds that worktree.
+
+## Rollouts
+
+`ac` does not deploy. It runs the hooks a profile declares and hands them the
+image references it just pushed, so build, push and ship become one command
+while the deployment logic stays in your repo.
+
+```
+ac <project> build --rollout -P prod    build, push, then roll out
+ac <project> rollout -P prod            roll out what is already pushed
+ac <project> rollout -P prod --dry-run  the hooks and their env, nothing run
+ac <project> build --no-rollout         never roll out, even if auto is set
+```
+
+```json
+"prod": {
+  "push": true,
+  "tag": "latest",
+  "rollout": {
+    "preflight": [["./scripts/preflight.sh", "app", "workers"]],
+    "run":       [["./scripts/rollout.sh", "app", "workers"]]
+  }
+}
+```
+
+`preflight` runs **before anything is built**, so an unreachable cluster or
+expired credentials fail in seconds rather than after a long build. `run`
+fires only once every build and push in that invocation has succeeded. A
+non-zero exit from either aborts. Because the block hangs off the profile,
+each profile gets its own blast radius: one may restart every deployment,
+another only the pre-prod ones. `"auto": true` rolls out without the flag.
+
+Hooks are argv from the build root, with `{{...}}` interpolation plus
+`{{image.<build>}}`, and receive the resolved references in the environment:
+
+| Variable | Value |
+| --- | --- |
+| `AC_IMAGE_<BUILD>` | primary tag, e.g. `AC_IMAGE_WEB` (`-` becomes `_`) |
+| `AC_IMAGES_<BUILD>` | every tag for that build, space separated |
+| `AC_IMAGES` | every tag pushed in this run |
+| `AC_BUILDS` | build names in this run, so a hook can tell what is fresh |
+| `AC_PROFILE`, `AC_ACCOUNT`, `AC_REGISTRY`, `AC_TAG`, `AC_REGION` | profile values |
+| `AC_VERSION`, `AC_GIT_SHA`, `AC_GIT_SHORT_SHA`, `AC_GIT_BRANCH`, `AC_GIT_DIRTY` | source values |
+
+`AC_IMAGE_*` is set for every build the manifest declares, not only the ones
+built, so a hook can pin a service that was not rebuilt. Check `AC_BUILDS`
+before doing that, and verify the tag exists.
 
 ## Adding a project
 

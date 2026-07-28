@@ -278,6 +278,7 @@ hatch `ac -p <project> <action>`.
 | `ip [svc...]` | Container IPs from the daemon. A single named service prints just the address. |
 | `env <svc>` | Environment variables from the manifest. |
 | `build [name...]` | See [Builds](#builds). |
+| `rollout [-P profile] [name...]` | Runs the profile's rollout hooks against images already pushed, without rebuilding. See [Rollouts](#rollouts). |
 | `login [-P profile]` | Runs each registry's `passwordCmd` into `container registry login --password-stdin`. |
 | `config` | The project manifest as written. |
 
@@ -382,6 +383,71 @@ Rule 3 is what makes git worktrees work: running a build from inside a worktree
 builds **that** tree, not the path baked into the manifest, without needing a
 second manifest per worktree. Requiring the dockerfile to be present is what
 stops an unrelated repo hijacking the build.
+
+## Rollouts
+
+`ac` has no deployment logic and no Kubernetes awareness. A profile declares
+hooks, `ac` runs them and hands them the image references it resolved, which is
+what turns build, push and ship into one command without teaching `ac` about
+anyone's cluster.
+
+```json
+"prod": {
+  "push": true,
+  "tag": "latest",
+  "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/",
+  "rollout": {
+    "description": "restart the app deployments and pin the workers",
+    "preflight": [["./extras/ac-scripts/preflight.sh", "app", "workers"]],
+    "run":       [["./extras/ac-scripts/rollout.sh", "app", "workers"]],
+    "auto": false
+  }
+}
+```
+
+```
+ac shop build --rollout -P prod      build, push, then roll out
+ac shop rollout -P prod              roll out what is already pushed
+ac shop rollout -P prod --dry-run    resolved hooks and env, nothing run
+ac shop build --no-rollout           never roll out, even when auto is true
+```
+
+- **`preflight` runs before anything is built.** Before the daemon is ensured,
+  before the builder is sized, before any registry login. An unreachable
+  cluster or an expired token therefore fails in seconds instead of after a
+  ten minute build. This is the whole reason the hook list is split in two.
+- **`run` fires only after every build and push in the invocation succeeded.**
+  A non-zero exit from either list aborts and propagates.
+- **The block hangs off the profile, not the project**, so blast radius is
+  per profile: `prod` may restart everything while `pre-prod` touches only the
+  pre-prod deployments. A profile with no `rollout` key can never deploy,
+  which is what keeps `local` safe.
+- `--rollout` against a profile that resolves to `push: false` is an error;
+  nothing would have reached the registry for the rollout to pick up.
+- `auto: true` rolls out on every build for that profile. `--no-rollout` still
+  wins.
+
+Hooks are argv, run from the resolved build root, with the usual `{{...}}`
+interpolation plus `{{image.<build>}}`. They also receive the resolved
+references in the environment, which is the interface the scripts actually use:
+
+| Variable | Value |
+| --- | --- |
+| `AC_IMAGE_<BUILD>` | the build's primary tag, e.g. `AC_IMAGE_WEB` |
+| `AC_IMAGES_<BUILD>` | every tag for that build, space separated |
+| `AC_IMAGES` | every tag pushed in this run |
+| `AC_BUILDS` | build names in this run |
+| `AC_PROJECT`, `AC_PROFILE`, `AC_ACCOUNT`, `AC_REGISTRY`, `AC_TAG`, `AC_REGION`, `AC_ROOT` | resolved profile values |
+| `AC_VERSION`, `AC_GIT_SHA`, `AC_GIT_SHORT_SHA`, `AC_GIT_BRANCH`, `AC_GIT_DIRTY`, `AC_TIMESTAMP` | source values |
+
+A build name is upper-cased with every non-alphanumeric character replaced by
+`_`, so a build called `api-workers` arrives as `AC_IMAGE_API_WORKERS`.
+
+`AC_IMAGE_*` is populated for **every** build the manifest declares, not just
+the ones being built, so a hook can pin a service that was not rebuilt in this
+run. That is deliberate but sharp: a hook doing so should check `AC_BUILDS`
+and confirm the tag actually exists in the registry, or it will pin a
+deployment to an image nobody pushed.
 
 ## Apple Container gotchas
 

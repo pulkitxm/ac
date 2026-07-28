@@ -995,8 +995,20 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                 builder_memory: args.builder_memory.clone(),
                 sequential: args.sequential,
                 dry_run: args.dry_run,
+                rollout: args.rollout_override(),
             };
             build::project_build(ctx, proj, &args.names, &ov)
+        }
+
+        Action::Rollout(args) => {
+            let ov = BuildOverrides {
+                profile: args.profile.clone(),
+                root: args.root.clone(),
+                dry_run: args.dry_run,
+                rollout: Some(true),
+                ..Default::default()
+            };
+            build::project_rollout(ctx, proj, &args.names, &ov)
         }
 
         Action::Login { profile } => {
@@ -1181,14 +1193,87 @@ mod tests {
             git_branch: "main".into(),
             git_dirty_suffix: "-local-1".into(),
             timestamp: "20260101000000".into(),
+            images: [("web".to_string(), vec!["r/web:t".to_string()])]
+                .into_iter()
+                .collect(),
         };
         let s = "{{profile}}|{{account}}|{{tag}}|{{region}}|{{registry}}|{{version}}|\
-                 {{git.sha}}|{{git.shortSha}}|{{git.branch}}|{{git.dirtySuffix}}|{{timestamp}}";
+                 {{git.sha}}|{{git.shortSha}}|{{git.branch}}|{{git.dirtySuffix}}|{{timestamp}}|\
+                 {{image.web}}";
         assert_eq!(
             build::interpolate(s, &v),
-            "dev|123|t|us-east-1|r/|1.2.3|abc|ab|main|-local-1|20260101000000"
+            "dev|123|t|us-east-1|r/|1.2.3|abc|ab|main|-local-1|20260101000000|r/web:t"
         );
         assert!(!build::interpolate(s, &v).contains("{{"));
+    }
+
+    #[test]
+    fn rollout_hook_env_carries_image_refs() {
+        let dir = std::env::temp_dir();
+        let text = r#"{
+            "name": "demo",
+            "profiles": { "prod": { "push": true, "tag": "latest", "registry": "reg/",
+                          "rollout": { "run": [["./deploy.sh"]] } } },
+            "builds": [
+              { "name": "web", "dockerfile": "Dockerfile", "image": "{{registry}}web",
+                "tags": ["{{tag}}"] },
+              { "name": "api-workers", "dockerfile": "Dockerfile", "image": "{{registry}}wrk",
+                "tags": ["{{tag}}", "pinned"] }
+            ]
+        }"#;
+        let m: manifest::Manifest = serde_json::from_str(text).expect("manifest parses");
+        let proj = manifest::Project {
+            name: "demo".into(),
+            file: dir.join("demo.json"),
+            manifest: m,
+            raw: text.to_string(),
+        };
+        let v = build::vars_for(&proj, "prod", &dir);
+        let env = build::hook_env(&proj, &v, &dir, &["web".to_string()]);
+        let get = |k: &str| {
+            env.iter()
+                .find(|(n, _)| n == k)
+                .map(|(_, x)| x.clone())
+                .unwrap_or_default()
+        };
+
+        assert_eq!(get("AC_IMAGE_WEB"), "reg/web:latest");
+        assert_eq!(get("AC_IMAGE_API_WORKERS"), "reg/wrk:latest");
+        assert_eq!(
+            get("AC_IMAGES_API_WORKERS"),
+            "reg/wrk:latest reg/wrk:pinned"
+        );
+        assert_eq!(get("AC_IMAGES"), "reg/web:latest");
+        assert_eq!(get("AC_BUILDS"), "web");
+        assert_eq!(get("AC_PROFILE"), "prod");
+    }
+
+    #[test]
+    fn rollout_is_rejected_for_a_profile_that_declares_none() {
+        let text = r#"{
+            "name": "demo",
+            "profiles": { "local": { "push": false } },
+            "builds": [{ "name": "web", "dockerfile": "Dockerfile", "image": "web",
+                         "tags": ["dev"] }]
+        }"#;
+        let m: manifest::Manifest = serde_json::from_str(text).expect("manifest parses");
+        assert!(m.profiles.get("local").expect("profile").rollout.is_none());
+    }
+
+    #[test]
+    fn a_profile_rollout_block_parses_and_rejects_typos() {
+        let ok = r#"{ "push": true, "rollout": {
+            "description": "ship it", "auto": true,
+            "preflight": [["./pre.sh"]], "run": [["./go.sh", "{{profile}}"]] } }"#;
+        let p: manifest::Profile = serde_json::from_str(ok).expect("rollout parses");
+        let r = p.rollout.expect("rollout present");
+        assert!(r.auto);
+        assert_eq!(r.run[0], vec!["./go.sh", "{{profile}}"]);
+
+        let typo = r#"{ "push": true, "rollout": { "runn": [["./go.sh"]] } }"#;
+        let err = serde_json::from_str::<manifest::Profile>(typo)
+            .expect_err("unknown field must be rejected");
+        assert!(err.to_string().contains("runn"), "got: {err}");
     }
 
     #[test]
