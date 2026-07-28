@@ -88,6 +88,7 @@ fn passthrough_raw_json(ctx: &Ctx, args: Vec<String>) -> Result<()> {
 
 fn passthrough(ctx: &Ctx, args: Vec<String>) -> Result<()> {
     daemon::ensure(ctx)?;
+    supervisor::ensure(ctx)?;
     let status = ctx.container(args).status()?;
     supervisor::settle(ctx)?;
     exit_ok(status)
@@ -486,7 +487,10 @@ pub fn system(ctx: &Ctx, action: Option<&SystemAction>) -> Result<()> {
             Ok(())
         }
         SystemAction::Df => passthrough_json(ctx, &["system", "df"]),
-        SystemAction::Start => daemon::ensure(ctx),
+        SystemAction::Start => {
+            daemon::ensure(ctx)?;
+            supervisor::ensure(ctx)
+        }
         SystemAction::Stop => {
             supervisor::stop(ctx);
             daemon::release(ctx)

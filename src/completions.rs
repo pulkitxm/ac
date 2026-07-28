@@ -1,10 +1,16 @@
+use std::ffi::OsStr;
+
 use clap::{Arg, Command, CommandFactory};
-use clap_complete::engine::ArgValueCandidates;
+use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter, PathCompleter, ValueCompleter};
 use clap_complete::CompletionCandidate;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, RESERVED};
 use crate::ctx::Ctx;
 use crate::manifest;
+
+const SIGNALS: &[&str] = &[
+    "KILL", "TERM", "INT", "HUP", "QUIT", "USR1", "USR2", "STOP", "CONT",
+];
 
 pub fn completion_command() -> Command {
     let base = Cli::command();
@@ -17,17 +23,26 @@ pub fn completion_command() -> Command {
         return base;
     };
 
-    let names = project_names();
-    if names.is_empty() {
-        return base;
-    }
+    let globals: Vec<String> = base
+        .get_subcommands()
+        .filter(|s| s.get_name() != "project")
+        .map(|s| s.get_name().to_string())
+        .collect();
 
     let mut cmd = base.mut_subcommand("project", |sub| {
         sub.mut_arg("name", |arg| {
             arg.add(ArgValueCandidates::new(|| candidates(project_names())))
         })
     });
-    for name in names {
+
+    for name in globals {
+        cmd = cmd.mut_subcommand(name.clone(), move |s| with_global_candidates(s, &name));
+    }
+
+    for name in project_names() {
+        if RESERVED.contains(&name.as_str()) {
+            continue;
+        }
         let leaked: &'static str = Box::leak(name.clone().into_boxed_str());
         let mut sub = Command::new(leaked).about(format!("Actions for {name}"));
         for action in template.get_subcommands() {
@@ -36,6 +51,93 @@ pub fn completion_command() -> Command {
         cmd = cmd.subcommand(sub);
     }
     cmd
+}
+
+fn with_global_candidates(cmd: Command, path: &str) -> Command {
+    let nested: Vec<String> = cmd
+        .get_subcommands()
+        .map(|s| s.get_name().to_string())
+        .collect();
+    let owned = path.to_string();
+    let mut out = cmd.mut_args(|arg| decorate_global(arg, &owned));
+    for name in nested {
+        let child = format!("{path} {name}");
+        out = out.mut_subcommand(name, move |s| with_global_candidates(s, &child));
+    }
+    out
+}
+
+fn decorate_global(arg: Arg, path: &str) -> Arg {
+    match arg.get_id().as_str() {
+        "containers" | "container" => {
+            arg.add(ArgValueCandidates::new(|| candidates(container_names())))
+        }
+        "image" | "reference" | "references" | "source" => {
+            arg.add(ArgValueCandidates::new(|| candidates(image_refs())))
+        }
+        "src" | "dst" => arg.add(ArgValueCompleter::new(cp_completer)),
+        "signal" => arg.add(ArgValueCandidates::new(|| {
+            candidates(SIGNALS.iter().map(|s| s.to_string()).collect())
+        })),
+        "server" => arg.add(ArgValueCandidates::new(|| candidates(registry_names()))),
+        "file" => arg.add(ArgValueCompleter::new(PathCompleter::file())),
+        "context" => arg.add(ArgValueCompleter::new(PathCompleter::dir())),
+        "input" => arg.add(ArgValueCompleter::new(PathCompleter::file())),
+        "output" => arg.add(ArgValueCompleter::new(PathCompleter::any())),
+        "target" if path != "tag" && path != "image tag" => {
+            arg.add(ArgValueCandidates::new(|| candidates(image_refs())))
+        }
+        _ => arg,
+    }
+}
+
+fn cp_completer(current: &OsStr) -> Vec<CompletionCandidate> {
+    let Some(cur) = current.to_str() else {
+        return Vec::new();
+    };
+    if cur.contains(':') {
+        return Vec::new();
+    }
+    container_names()
+        .into_iter()
+        .filter(|n| n.starts_with(cur))
+        .map(|n| CompletionCandidate::new(format!("{n}:/")))
+        .chain(PathCompleter::any().complete(current))
+        .collect()
+}
+
+fn daemon_backed(args: &[&str]) -> Vec<String> {
+    if std::env::var_os("AC_COMPLETE_OFFLINE").is_some() {
+        return Vec::new();
+    }
+    let Ok(ctx) = Ctx::new(false, true, true) else {
+        return Vec::new();
+    };
+    if ctx
+        .container(["system", "status"])
+        .silent()
+        .quiet_ok_timeout(1)
+        != Some(true)
+    {
+        return Vec::new();
+    }
+    ctx.container(args.to_vec())
+        .silent()
+        .stdout_timeout(2)
+        .map(|s| s.lines().map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+fn container_names() -> Vec<String> {
+    daemon_backed(&["ls", "-a", "-q"])
+}
+
+fn image_refs() -> Vec<String> {
+    daemon_backed(&["image", "ls", "-q"])
+}
+
+fn registry_names() -> Vec<String> {
+    daemon_backed(&["registry", "ls", "-q"])
 }
 
 fn with_candidates(action: Command, project: &str) -> Command {
@@ -215,6 +317,29 @@ mod tests {
             names.iter().any(|n| n == "shop-postgres"),
             "the container name form printed by ls must complete too"
         );
+    }
+
+    #[test]
+    fn global_container_verbs_take_a_container_argument() {
+        let cmd = completion_command();
+        for verb in [
+            "start", "stop", "restart", "rm", "exec", "sh", "logs", "inspect", "kill", "export",
+            "top", "port",
+        ] {
+            let c = sub(&cmd, verb).unwrap_or_else(|| panic!("{verb} missing"));
+            let has = c
+                .get_arguments()
+                .any(|a| matches!(a.get_id().as_str(), "containers" | "container"));
+            assert!(has, "{verb} should take a container argument");
+        }
+    }
+
+    #[test]
+    fn offline_completion_never_touches_the_daemon() {
+        std::env::set_var("AC_COMPLETE_OFFLINE", "1");
+        assert!(container_names().is_empty());
+        assert!(image_refs().is_empty());
+        std::env::remove_var("AC_COMPLETE_OFFLINE");
     }
 
     #[test]

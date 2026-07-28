@@ -146,13 +146,33 @@ fn rewrite_argv(argv: &[String]) -> Result<Vec<String>> {
 }
 
 fn map_format_json(rest: &[String]) -> Result<Vec<String>> {
+    let takes_user_argv = |s: &str| matches!(s, "exec" | "run" | "cp" | "copy" | "machine");
+
     let mut out: Vec<String> = Vec::with_capacity(rest.len());
     let mut i = 0;
+    let mut word = 0usize;
+    let mut first_word: Option<String> = None;
     let mut passthrough_zone = false;
     while i < rest.len() {
         let tok = rest[i].as_str();
-        if matches!(tok, "exec" | "run" | "cp") {
-            passthrough_zone = true;
+        if !tok.starts_with('-') {
+            let is_verb = match word {
+                0 => takes_user_argv(tok),
+                1 => {
+                    takes_user_argv(tok)
+                        && first_word
+                            .as_deref()
+                            .is_some_and(|w| !RESERVED.contains(&w))
+                }
+                _ => false,
+            };
+            if is_verb {
+                passthrough_zone = true;
+            }
+            if word == 0 {
+                first_word = Some(tok.to_string());
+            }
+            word += 1;
         }
         if !passthrough_zone {
             if tok == "--format" {
@@ -1267,6 +1287,44 @@ mod tests {
         );
         let err = map_format_json(&a(&["ps", "--format", "table"])).unwrap_err();
         assert!(err.to_string().contains("--json"), "{err}");
+    }
+
+    #[test]
+    fn a_passthrough_verb_used_as_a_container_name_is_not_a_passthrough_zone() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            map_format_json(&a(&["stop", "run", "--format", "json"])).unwrap(),
+            a(&["stop", "run", "--json"])
+        );
+        assert_eq!(
+            map_format_json(&a(&["logs", "cp", "--format", "json"])).unwrap(),
+            a(&["logs", "cp", "--json"])
+        );
+        assert_eq!(
+            map_format_json(&a(&["exec", "web", "cmd", "--format", "json"])).unwrap(),
+            a(&["exec", "web", "cmd", "--format", "json"])
+        );
+        assert_eq!(
+            map_format_json(&a(&["--json", "run", "img", "--format", "json"])).unwrap(),
+            a(&["--json", "run", "img", "--format", "json"])
+        );
+    }
+
+    #[test]
+    fn every_top_level_command_is_reserved() {
+        let cmd = Cli::command();
+        let missing: Vec<String> = cmd
+            .get_subcommands()
+            .flat_map(|s| {
+                std::iter::once(s.get_name().to_string())
+                    .chain(s.get_all_aliases().map(|a| a.to_string()))
+            })
+            .filter(|n| !RESERVED.contains(&n.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these subcommands parse as project names because RESERVED is stale: {missing:?}"
+        );
     }
 
     #[test]

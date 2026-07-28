@@ -192,6 +192,7 @@ pub fn run(
     command: &[String],
 ) -> Result<ExitStatus> {
     daemon::ensure(ctx)?;
+    supervisor::ensure(ctx)?;
 
     let mut args: Vec<String> = vec!["run".into()];
     if opts.detach {
@@ -231,6 +232,7 @@ pub fn create(
     command: &[String],
 ) -> Result<ExitStatus> {
     daemon::ensure(ctx)?;
+    supervisor::ensure(ctx)?;
 
     if opts.progress.is_some() {
         ctx.warn("container create has no --progress; ignoring it");
@@ -332,6 +334,7 @@ pub fn build(ctx: &Ctx, b: &BuildArgs) -> Result<()> {
 
 pub fn start(ctx: &Ctx, containers: &[String], attach: bool, interactive: bool) -> Result<()> {
     daemon::ensure(ctx)?;
+    supervisor::ensure(ctx)?;
     let targets = resolve_all(ctx, containers)?;
     let mut failed = Vec::new();
     for c in &targets {
@@ -413,6 +416,7 @@ pub fn stop(
 
 pub fn restart(ctx: &Ctx, containers: &[String], time: Option<u32>) -> Result<()> {
     daemon::ensure(ctx)?;
+    supervisor::ensure(ctx)?;
     let targets = resolve_all(ctx, containers)?;
     for c in &targets {
         if Snapshot::query_silent(ctx).state(c) == "running" {

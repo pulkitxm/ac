@@ -33,8 +33,9 @@ pub struct Cli {
     pub json: bool,
 
     /// Do not echo the underlying `container` commands. Same as AC_QUIET=1.
-    /// The short -q belongs to the docker-style listing commands (ps, image
-    /// ls), where it means "ids only".
+    /// There is deliberately no short form: `-q` means "names only" on the
+    /// listing commands (ps, image ls) and "suppress build output" on
+    /// `ac build`.
     #[arg(long, global = true)]
     pub quiet: bool,
 
