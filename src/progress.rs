@@ -46,6 +46,10 @@ pub fn parse_line(line: &str) -> Event<'_> {
             text: t.trim_start_matches(": ").trim(),
         };
     }
+    let head = tail.split_whitespace().next().unwrap_or("");
+    if head.parse::<f32>().is_ok() {
+        return Event::Log { id };
+    }
     Event::Started { id, name: tail }
 }
 
@@ -267,6 +271,8 @@ mod tests {
         );
         assert_eq!(parse_line("#4 CACHED"), Event::Cached { id: 4 });
         assert_eq!(parse_line("#4 CANCELED"), Event::Canceled { id: 4 });
+        assert_eq!(parse_line("#5 0.047 web-one"), Event::Log { id: 5 });
+        assert_eq!(parse_line("#5 12 lines of output"), Event::Log { id: 5 });
         assert_eq!(
             parse_line("#6 ERROR: process did not complete"),
             Event::Error {
@@ -323,6 +329,7 @@ mod tests {
             .is_none());
         assert!(t.observe("#2 DONE 0.0s").is_none());
         assert!(t.observe("#5 [linux/arm64 1/3] RUN echo hello").is_none());
+        assert!(t.observe("#5 0.047 hello").is_none());
         let fin = t.observe("#5 DONE 0.1s").unwrap();
         assert_eq!(fin.index, Some(1));
         assert_eq!(fin.total, Some(3));
