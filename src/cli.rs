@@ -859,10 +859,9 @@ pub const RESERVED: &[&str] = &[
 ];
 
 pub const PROJECT_ACTIONS: &[&str] = &[
-    "start", "up", "stop", "down", "restart", "logs", "run", "create", "top",
-    "wait", "push", "export", "exec", "sh", "shell", "stats", "inspect",
-    "kill", "rm", "cp", "pull", "port", "ip", "env", "build", "login",
-    "services", "builds", "profiles",
+    "start", "up", "stop", "down", "restart", "logs", "run", "create", "top", "wait", "push",
+    "export", "exec", "sh", "shell", "stats", "inspect", "kill", "rm", "cp", "pull", "port", "ip",
+    "env", "build", "login", "services", "builds", "profiles",
 ];
 
 #[derive(Debug, Subcommand)]

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  lint:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test
+
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release
+      - name: Smoke test the binary surfaces that need no daemon
+        run: |
+          ./target/release/ac version
+          ./target/release/ac help >/dev/null
+          ./target/release/ac schema >/dev/null
+          ./target/release/ac guide >/dev/null
+          ./target/release/ac completions zsh >/dev/null
+          ./target/release/ac completions bash >/dev/null
+          ./target/release/ac completions fish >/dev/null
+
+  comments:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Enforce the no-comments policy from CLAUDE.md
+        run: |
+          rust=$(grep -nE '^\s*//' src/*.rs | grep -v '^src/cli.rs' || true)
+          if [ -n "$rust" ]; then echo "$rust"; exit 1; fi
+          shell=$(grep -nE '^\s*#' Makefile tests/e2e.sh | grep -v '#!' || true)
+          if [ -n "$shell" ]; then echo "$shell"; exit 1; fi

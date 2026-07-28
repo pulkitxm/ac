@@ -399,7 +399,9 @@ mod tests {
 
     #[test]
     fn name_must_match_the_file_name() {
-        let err = load(r#"{"name":"other","services":[]}"#, "m1").err().unwrap();
+        let err = load(r#"{"name":"other","services":[]}"#, "m1")
+            .err()
+            .unwrap();
         assert!(err.to_string().contains("'other'"), "{err}");
         assert!(err.to_string().contains("m1.json"), "{err}");
         assert!(load(r#"{"name":"m2","services":[]}"#, "m2").is_ok());
