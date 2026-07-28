@@ -610,7 +610,6 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             if let Some((cname, path)) = container_side(&src_r) {
                 match ctx
                     .container(["exec", &cname, "sh", "-c", "test -e \"$1\"", "_", &path])
-                    .silent()
                     .quiet_ok_timeout(10)
                 {
                     Some(true) => {}
@@ -644,7 +643,6 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                             &path,
                             &base,
                         ])
-                        .silent()
                         .quiet_ok_timeout(10);
                     if landed == Some(false) {
                         return Err(anyhow!(

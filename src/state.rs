@@ -45,7 +45,7 @@ impl Snapshot {
 
     fn query_inner(ctx: &Ctx, silent: bool) -> Snapshot {
         let runner = ctx.container(["ls", "-a", "--format", "json"]);
-        let runner = if silent { runner.silent() } else { runner };
+        let runner = if silent { runner.echo_once() } else { runner };
         let Ok(text) = runner.stdout() else {
             return Snapshot::default();
         };

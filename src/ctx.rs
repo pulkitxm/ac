@@ -1,8 +1,10 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -71,6 +73,7 @@ pub struct Ctx {
     pub json: bool,
     pub quiet: bool,
     pub color: bool,
+    echoed: Mutex<HashSet<String>>,
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
     pub owner_file: PathBuf,
@@ -104,6 +107,7 @@ impl Ctx {
             json,
             quiet,
             color,
+            echoed: Mutex::new(HashSet::new()),
             config_file: config_dir.join("config.json"),
             owner_file: state_dir.join("daemon.owned"),
             supervisor_pidfile: state_dir.join("supervisor.pid"),
@@ -204,6 +208,7 @@ pub struct Runner<'a> {
     cwd: Option<PathBuf>,
     envs: Vec<(String, String)>,
     silent: bool,
+    once: bool,
 }
 
 impl<'a> Runner<'a> {
@@ -215,6 +220,7 @@ impl<'a> Runner<'a> {
             cwd: None,
             envs: Vec::new(),
             silent: false,
+            once: false,
         }
     }
 
@@ -239,6 +245,11 @@ impl<'a> Runner<'a> {
         self
     }
 
+    pub fn echo_once(mut self) -> Self {
+        self.once = true;
+        self
+    }
+
     pub fn display(&self) -> String {
         let mut s = self.prog.clone();
         for a in &self.args {
@@ -252,7 +263,16 @@ impl<'a> Runner<'a> {
         if self.silent || self.ctx.quiet {
             return;
         }
-        eprintln!("{}", style::dim_err(&format!("$ {}", self.display())));
+        let line = self.display();
+        if self.once {
+            let Ok(mut seen) = self.ctx.echoed.lock() else {
+                return;
+            };
+            if !seen.insert(line.clone()) {
+                return;
+            }
+        }
+        eprintln!("{}", style::dim_err(&format!("$ {line}")));
     }
 
     fn build(&self) -> Command {
