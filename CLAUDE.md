@@ -15,13 +15,10 @@ It also manages the `container` daemon itself, under a strict ownership rule
 described below, so the daemon is running exactly when it needs to be and is
 never taken away from someone else.
 
-Two implementations live in this repo, side by side:
-
-- **bash** (`bin/ac`, `lib/*.sh`) the original, and the behavioural spec.
-- **Rust** (`src/*.rs`, `Cargo.toml`) the rewrite. Build it with `make build`;
-  the binary lands at `target/release/ac`.
-
-They are intended to behave identically. Where they deliberately differ, see
+The tool is written in Rust (`src/*.rs`, `Cargo.toml`). Build it with
+`make build`; the binary lands at `target/release/ac`. It started life as a
+bash script that has since been retired; where the rewrite deliberately
+changed behaviour, see
 [Deliberate differences from bash](#deliberate-differences-from-bash).
 
 ## The daemon ownership contract
@@ -76,9 +73,10 @@ it. `ac daemon stop` does nothing in the external case, by design.
 
 ## Make targets
 
-Every target exports the Rust toolchain, which lives on an external SSD rather
-than in `~/.cargo`. **Plain `cargo build` will not find a compiler**; go through
-`make`, or export `CARGO_HOME` and `RUSTUP_HOME` yourself.
+Every target exports the Rust toolchain locations, defaulting to `~/.cargo`
+and `~/.rustup`. A toolchain that lives elsewhere (an external disk, say) is
+pointed at from an untracked `Makefile.local` that sets `CARGO_HOME` and
+`RUSTUP_HOME`; every target picks it up automatically.
 
 | Target | What it does |
 | --- | --- |
@@ -94,17 +92,13 @@ than in `~/.cargo`. **Plain `cargo build` will not find a compiler**; go through
 | `make clean` | Remove build artefacts. |
 
 `make install` accepts `BIN_DIR` (default `~/.local/bin`) and `BIN_NAME`
-(default `ac`). To keep the bash `ac` on PATH at the same time:
-
-```
-make install BIN_NAME=ac-rs
-```
+(default `ac`), so `make install BIN_NAME=ac-dev` installs under another name.
 
 Note for anyone editing the Makefile: macOS ships GNU Make 3.81, which execs a
 recipe line directly when it contains no shell metacharacters, and that direct
 exec searches the PATH make itself started with rather than the exported one.
-That is why `CARGO` is an absolute path, quoted at every use site (the toolchain
-path contains a space).
+That is why `CARGO` is an absolute path, quoted at every use site (the
+toolchain path may contain a space).
 
 ## Manifest schema
 
@@ -502,9 +496,6 @@ Check for regressions:
 grep -nE '^\s*//' src/*.rs | grep -v '^src/cli.rs'    # expect no output
 grep -nE '^\s*#' Makefile tests/e2e.sh | grep -v '#!' # expect no output
 ```
-
-The bash implementation in `bin/` and `lib/` predates this rule and is left as
-it is; it is the reference spec, not active development.
 
 ## Docs that ship inside the binary
 

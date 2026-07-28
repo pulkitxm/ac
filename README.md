@@ -14,9 +14,104 @@ $ ac shop start
 ...
 ```
 
+## Install
+
+You need an Apple Silicon Mac on macOS 15 or newer, and a Rust toolchain to
+build the binary.
+
+1. Install Apple `container` (1.1.0 or newer). Download the signed `.pkg`
+   installer from the
+   [releases page](https://github.com/apple/container/releases), run it, then
+   check:
+
+   ```bash
+   container --version
+   ```
+
+   You do not need to start anything: `ac` starts and stops the daemon itself,
+   exactly when it is needed.
+
+2. Build and install `ac`:
+
+   ```bash
+   git clone https://github.com/pulkitxm/ac.git
+   cd ac
+   make install
+   ```
+
+   This builds the release binary and symlinks it into `~/.local/bin` (override
+   with `BIN_DIR=...` or `BIN_NAME=...`). If your Rust toolchain lives outside
+   `~/.cargo`, point at it in an untracked `Makefile.local`:
+
+   ```make
+   CARGO_HOME  := /path/to/cargo
+   RUSTUP_HOME := /path/to/rustup
+   ```
+
+3. Wire up your shell, in `~/.zshrc`:
+
+   ```zsh
+   export PATH="$HOME/.local/bin:$PATH"
+   source <(COMPLETE=zsh ac)
+   ```
+
+   For bash, use `COMPLETE=bash` in `~/.bashrc`. Completion covers projects,
+   actions, service names, flags and signal names.
+
+## Quickstart
+
+A project is one JSON manifest describing the services that make up a stack.
+Drop it in `~/.config/ac/projects/<name>.json`:
+
+```json
+{
+  "name": "myapp",
+  "description": "whatever this stack is",
+  "services": [
+    {
+      "name": "postgres",
+      "image": "docker.io/library/postgres:16-alpine",
+      "cpus": 2,
+      "memory": "1g",
+      "ports": ["5433:5432"],
+      "env": { "POSTGRES_USER": "user" },
+      "volumes": [{ "name": "pg-data", "target": "/var/lib/postgresql/data" }],
+      "readyCmd": ["pg_isready", "-U", "user"],
+      "readyTimeout": 90
+    }
+  ]
+}
+```
+
+Then:
+
+```bash
+ac ls              # your project is discovered
+ac myapp start     # daemon up if needed, volumes created, services started
+ac myapp ls        # state, IPs, ports
+ac myapp logs -f   # follow all services, prefixed and coloured
+ac myapp down      # stop and remove containers; volumes and data survive
+```
+
+| Field | Meaning |
+| --- | --- |
+| `image` | Full OCI reference. Include the registry (`docker.io/library/...`). |
+| `cpus`, `memory` | Sizes the container's **VM**, not a cgroup. Each container is its own VM. |
+| `ports` | `host:container`, same as Docker. Optional, since every container also gets its own routable IP. |
+| `env` | Key/value map. |
+| `volumes` | Named volumes; the real volume is `<project>-<name>`, created on demand. |
+| `readyCmd` | Polled via `container exec` until it exits 0. Apple `container` has no healthcheck primitive, so readiness is implemented here. |
+| `readyTimeout` | Seconds before giving up (start continues anyway, with a warning). |
+
+Services start in array order, each gated on the previous one's `readyCmd`.
+Containers are named `<project>-<service>`. Unknown manifest fields are
+rejected by name, so typos surface immediately. `ac schema` prints the full
+JSON Schema, and the bundled `projects/shop.json` is a complete worked example
+with builds, profiles and registries.
+
 ## Daemon ownership
 
-This is the part worth understanding, because it is the whole point of the tool.
+The part worth understanding, because it is the whole point of the tool.
 
 | Situation on `ac <project> start` | What `ac` does |
 | --- | --- |
@@ -29,28 +124,9 @@ containers. Once the last `ac`-managed container disappears (whether you ran
 supervisor stops the daemon and exits.
 
 Ownership lives in a file rather than in memory, so a second `ac` invocation
-from a different terminal makes the same decision.
-
-Shutdown refcounts across **all** projects: stopping `shop` while another
-project is still up leaves the daemon running.
-
-## Install
-
-```bash
-git clone git@github.com:pulkitxm/ac.git ~/scripts/ac
-cd ~/scripts/ac && ./install.sh
-```
-
-Then, in `~/.zshrc`:
-
-```zsh
-export PATH="$HOME/.local/bin:$PATH"
-export AC_HOME="$HOME/scripts/ac"
-fpath=("$AC_HOME/completions" $fpath)
-autoload -Uz compinit && compinit
-```
-
-Requires `jq` and Apple `container` 1.1.0+.
+from a different terminal makes the same decision. Shutdown refcounts across
+**all** projects: stopping one project while another is still up leaves the
+daemon running.
 
 ## Usage
 
@@ -104,14 +180,6 @@ Global noun groups mirror docker: `ac ps`, `ac image ls`, `ac volume prune`
 and friends map straight onto the underlying `container` commands, with
 `--json` on every read. `ac system start`/`stop` respect the ownership rule:
 ac never stops a daemon it did not start.
-
-`ac <project> logs -f` with no service follows every container at once, each
-line prefixed and coloured by service, the way `docker compose logs -f` does.
-Apple `container logs` only handles one container, so the fan-out happens in
-`ac` and Ctrl-C tears down the whole group.
-
-Tab completion covers projects, actions, service names (both forms), flags and
-signal names, in zsh and bash.
 
 ## Builds
 
@@ -172,48 +240,8 @@ Re-running on every start matters for ECR, whose tokens expire after 12 hours.
 registry that takes a username and a token on stdin:
 
 ```json
-{ "server": "ghcr.io", "username": "pulkitxm", "passwordCmd": ["gh", "auth", "token"] }
+{ "server": "ghcr.io", "username": "you", "passwordCmd": ["gh", "auth", "token"] }
 ```
-
-## Adding a project
-
-Drop a JSON file into `projects/`, or into `~/.config/ac/projects/` to keep it
-private. User projects shadow repo ones with the same name.
-
-```json
-{
-  "name": "myapp",
-  "description": "whatever this stack is",
-  "services": [
-    {
-      "name": "postgres",
-      "image": "docker.io/library/postgres:16-alpine",
-      "cpus": 2,
-      "memory": "1g",
-      "ports": ["5433:5432"],
-      "env": { "POSTGRES_USER": "user" },
-      "volumes": [{ "name": "pg-data", "target": "/var/lib/postgresql/data" }],
-      "readyCmd": ["pg_isready", "-U", "user"],
-      "readyTimeout": 90
-    }
-  ]
-}
-```
-
-| Field | Meaning |
-| --- | --- |
-| `image` | Full OCI reference. Include the registry (`docker.io/library/...`). |
-| `cpus`, `memory` | Sizes the container's **VM**, not a cgroup. Each container is its own VM. |
-| `ports` | `host:container`, same as Docker. Optional, since every container also gets its own routable IP. |
-| `env` | Key/value map. |
-| `volumes` | Named volumes; the real volume is `<project>-<name>`, created on demand. |
-| `readyCmd` | Polled via `container exec` until it exits 0. Apple `container` has no healthcheck primitive, so readiness is implemented here. |
-| `readyTimeout` | Seconds before giving up (start continues anyway, with a warning). |
-
-Services start in array order, each gated on the previous one's `readyCmd`.
-
-Containers are named `<project>-<service>`, which is also how `ac` recognises
-its own containers when deciding whether the daemon can be shut down.
 
 ## Configuration
 
@@ -221,19 +249,14 @@ its own containers when deciding whether the daemon can be shut down.
 
 ```json
 {
-  "appRoot": "/Volumes/ContainerData/app-root",
-  "sparseBundle": "/Volumes/External/container-data.sparsebundle",
-  "imageMount": "/Volumes/ContainerData",
+  "appRoot": "/path/to/app-root",
   "startTimeout": 90
 }
 ```
 
-- `appRoot`: passed as `--app-root` when `ac` starts the daemon. Seeded from
-  the running daemon on first run so `ac` keeps using your existing image store.
-- `sparseBundle` / `imageMount`: if set and not mounted, the bundle is attached
-  with `hdiutil attach -owners on` before the daemon starts. This is needed when
-  the app root lives on a volume mounted `noowners`, which otherwise makes
-  `container-apiserver` abort with `XPC connection error: Connection invalid`.
+`appRoot` is passed as `--app-root` when `ac` starts the daemon, and is seeded
+from the running daemon on first run so `ac` keeps using your existing image
+store.
 
 ## Notes on Apple Container
 
@@ -245,7 +268,7 @@ its own containers when deciding whether the daemon can be shut down.
 - Named volumes are real ext4 block devices, not host directories, so every
   fresh volume contains a `lost+found`. Anything that insists on an empty
   directory will refuse to start. Postgres is the common case, which is why the
-  shop manifest sets `PGDATA` to a subdirectory of the mount point:
+  example manifests set `PGDATA` to a subdirectory of the mount point:
 
   ```
   initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
