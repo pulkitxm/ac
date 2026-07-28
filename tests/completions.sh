@@ -150,8 +150,21 @@ offers "ac completions <tab>" "fish"     2 ac completions ""
 echo "build safety flags"
 offers "build flags" "--dry-run" 3 ac shop build ""
 
+echo "global docker verbs"
+offers "ac <tab> -> offers run"      "run"    1 ac ""
+offers "ac <tab> -> offers build"    "build"  1 ac ""
+offers "ac <tab> -> offers logs"     "logs"   1 ac ""
+offers "run flags -> --publish"      "--publish"  2 ac run ""
+offers "run flags -> --detach"       "--detach"   2 ac run ""
+offers "build flags -> --tag"        "--tag"      2 ac build ""
+offers "stop flags -> --all"         "--all"      2 ac stop ""
+offers "kill signals -> KILL"        "KILL"       3 ac kill -s ""
+offers "kill signals -> TERM"        "TERM"       3 ac kill -s ""
+offers "builder <tab> -> status"     "status"     2 ac builder ""
+
 echo "edge cases"
-omits "unknown project has no actions" "start" 2 ac nosuchproject ""
+omits "unknown project has no project actions" "down" 2 ac nosuchproject ""
+offers "known project still has them"          "down" 2 ac shop ""
 offers "global flags still complete"   "--help" 1 ac --
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
