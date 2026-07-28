@@ -11,7 +11,6 @@ CARGO := $(CARGO_HOME)/bin/cargo
 BIN_DIR  ?= $(HOME)/.local/bin
 BIN_NAME ?= ac
 
-COMPLETION_DIR := completions
 
 .DEFAULT_GOAL := help
 .PHONY: help build dev test lint fmt install completions clean e2e
@@ -53,11 +52,10 @@ install: build ## Build, then link the binary into BIN_DIR
 	@echo
 	@echo 'Add to ~/.zshrc if not already present:'
 	@echo '  export PATH="$(BIN_DIR):$$PATH"'
-	@echo '  fpath=("$(CURDIR)/$(COMPLETION_DIR)" $$fpath)'
-	@echo '  autoload -Uz compinit && compinit'
+	@echo '  source <(COMPLETE=zsh $(BIN_NAME))'
 	@echo
-	@echo 'For bash, source the completion directly:'
-	@echo '  source "$(CURDIR)/$(COMPLETION_DIR)/ac.bash"'
+	@echo 'For bash, in ~/.bashrc:'
+	@echo '  source <(COMPLETE=bash $(BIN_NAME))'
 
 completions: build ## Print the shell hook to source (dynamic, always in sync)
 	@echo '# add to ~/.zshrc:'
