@@ -236,7 +236,9 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
             if *verbose {
                 return exit_ok(ctx.container(["image", "ls", "--verbose"]).status()?);
             }
-            let text = ctx.container(["image", "ls", "--format", "json"]).stdout()?;
+            let text = ctx
+                .container(["image", "ls", "--format", "json"])
+                .stdout()?;
             let raw: Vec<serde_json::Value> = serde_json::from_str(&text)?;
             let mut rows: Vec<(String, String, String, u64, String)> = raw
                 .iter()
@@ -377,7 +379,9 @@ pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
                 return passthrough_json(ctx, &["volume", "ls"]);
             }
             daemon::require(ctx)?;
-            let text = ctx.container(["volume", "ls", "--format", "json"]).stdout()?;
+            let text = ctx
+                .container(["volume", "ls", "--format", "json"])
+                .stdout()?;
             let raw: Vec<serde_json::Value> = serde_json::from_str(&text)?;
             let mut rows: Vec<(String, String, String, String)> = raw
                 .iter()
@@ -385,8 +389,14 @@ pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
                     let c = e.get("configuration")?;
                     Some((
                         c.get("name")?.as_str()?.to_string(),
-                        c.get("driver").and_then(|x| x.as_str()).unwrap_or("-").to_string(),
-                        c.get("format").and_then(|x| x.as_str()).unwrap_or("-").to_string(),
+                        c.get("driver")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("-")
+                            .to_string(),
+                        c.get("format")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("-")
+                            .to_string(),
                         c.get("creationDate")
                             .and_then(|x| x.as_str())
                             .map(fmt_date)
@@ -401,7 +411,9 @@ pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
                 "NAME", "DRIVER", "FORMAT", "CREATED"
             )));
             for (name, driver, format, created) in &rows {
-                ctx.log(&format!("{name:<name_w$}  {driver:<7} {format:<7} {created}"));
+                ctx.log(&format!(
+                    "{name:<name_w$}  {driver:<7} {format:<7} {created}"
+                ));
             }
             Ok(())
         }
