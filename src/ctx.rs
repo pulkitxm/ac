@@ -417,6 +417,10 @@ pub fn set_quiet(quiet: bool) {
     QUIET.store(quiet, Ordering::Relaxed);
 }
 
+pub fn is_quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
 pub fn echo_external<S: AsRef<str>>(prog: &str, args: &[S]) {
     if QUIET.load(Ordering::Relaxed) {
         return;

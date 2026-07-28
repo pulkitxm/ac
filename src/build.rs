@@ -189,6 +189,26 @@ fn resolve_images(proj: &Project, v: &Vars) -> BTreeMap<String, Vec<String>> {
     map
 }
 
+pub fn absolute_against(path: &str, root: &Path) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    let joined = root.join(p);
+    match std::fs::canonicalize(&joined) {
+        Ok(c) => c.display().to_string(),
+        Err(_) => joined.display().to_string(),
+    }
+}
+
+fn absolute_prog(prog: &str, root: &Path) -> String {
+    if prog.contains('/') {
+        absolute_against(prog, root)
+    } else {
+        prog.to_string()
+    }
+}
+
 pub fn env_key(prefix: &str, name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -226,6 +246,10 @@ pub fn hook_env(proj: &Project, v: &Vars, root: &Path, builds: &[String]) -> Vec
         ),
         ("AC_TIMESTAMP".to_string(), v.timestamp.clone()),
         ("AC_BUILDS".to_string(), builds.join(" ")),
+        (
+            "AC_QUIET".to_string(),
+            if crate::ctx::is_quiet() { "1" } else { "0" }.to_string(),
+        ),
     ];
 
     let mut all: Vec<String> = Vec::new();
@@ -616,7 +640,8 @@ fn run_hooks(
         if hook.is_empty() {
             continue;
         }
-        let argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
+        let mut argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
+        argv[0] = absolute_prog(&argv[0], root);
         rep.info(key);
         rep.phase(&format!("{key}: {}", argv[0]));
         let runner = rep
@@ -647,6 +672,7 @@ fn plan_build(
     ov: &BuildOverrides,
     v: &Vars,
     progress: Option<&str>,
+    root: &Path,
 ) -> Result<Plan> {
     let platform = ov
         .platform
@@ -689,7 +715,7 @@ git placeholders are empty because the build root is not a git repository",
         "--platform".into(),
         platform.clone(),
         "-f".into(),
-        b.dockerfile.clone(),
+        absolute_against(&b.dockerfile, root),
     ];
     if let Some(p) = progress {
         args.push("--progress".into());
@@ -735,7 +761,7 @@ git placeholders are empty because the build root is not a git repository",
         args.push("-t".into());
         args.push(t.clone());
     }
-    args.push(b.context.clone());
+    args.push(absolute_against(&b.context, root));
 
     Ok(Plan {
         args,
@@ -801,7 +827,7 @@ fn build_one(
     v: &Vars,
     progress: Option<&str>,
 ) -> Result<(Vec<String>, bool)> {
-    let plan = plan_build(proj, b, ov, v, progress)?;
+    let plan = plan_build(proj, b, ov, v, progress, root)?;
 
     let env = hook_env(proj, v, root, std::slice::from_ref(&b.name));
     rep.phase("preflight");
@@ -962,7 +988,11 @@ fn emit_rollout_plan(
         hooks
             .iter()
             .filter(|h| !h.is_empty())
-            .map(|h| h.iter().map(|a| interpolate(a, vars)).collect())
+            .map(|h| {
+                let mut argv: Vec<String> = h.iter().map(|a| interpolate(a, vars)).collect();
+                argv[0] = absolute_prog(&argv[0], root);
+                argv
+            })
             .collect()
     };
     let pre = render(&rollout.preflight);
@@ -1053,7 +1083,7 @@ so nothing would reach the registry for the rollout to pick up"
             .iter()
             .filter_map(|t| proj.manifest.build(t))
             .filter_map(|b| {
-                plan_build(proj, b, ov, &vars_preview, ov.progress.as_deref())
+                plan_build(proj, b, ov, &vars_preview, ov.progress.as_deref(), &root)
                     .ok()
                     .map(|plan| (b, plan))
             })
@@ -1087,7 +1117,7 @@ so nothing would reach the registry for the rollout to pick up"
             if let Some(a) = p["command"].as_array() {
                 let joined: Vec<String> = a
                     .iter()
-                    .map(|x| x.as_str().unwrap_or("").to_string())
+                    .map(|x| crate::ctx::shell_quote(x.as_str().unwrap_or("")))
                     .collect();
                 println!(
                     "  {}",
