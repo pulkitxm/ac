@@ -1089,7 +1089,7 @@ so nothing would reach the registry for the rollout to pick up"
         builder_memory(proj, ov).as_deref(),
     );
 
-    let vars = vars_for(proj, &profile, &root);
+    let vars = vars_preview;
 
     let entries: Vec<Build> = targets
         .iter()
