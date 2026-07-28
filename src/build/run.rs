@@ -18,6 +18,7 @@ use crate::build::vars::{interpolate, resolve_root, vars_for, BuildOverrides, Va
 use crate::commands::project;
 use crate::core::ctx::Ctx;
 use crate::core::style;
+use crate::core::util::Table;
 use crate::daemon;
 use crate::manifest::{Build, Project};
 use crate::progress::fmt_secs;
@@ -468,10 +469,7 @@ fn report(ctx: &Ctx, outcomes: &[Outcome]) -> Result<()> {
         let items: Vec<serde_json::Value> = outcomes.iter().map(|o| o.to_json()).collect();
         ctx.emit_json(&serde_json::Value::Array(items))?;
     } else {
-        ctx.log(&style::bold(&format!(
-            "{:<14} {:<8} {:>9} {:>14}  {}",
-            "BUILD", "STATUS", "TIME", "STEPS", "TAGS"
-        )));
+        let mut table = Table::new(&["BUILD", "STATUS", "TIME", "STEPS", "TAGS"]).right(&[2, 3]);
         for o in outcomes {
             let status = if o.ok { "ok" } else { "failed" };
             let steps = if o.steps_done > 0 {
@@ -479,15 +477,15 @@ fn report(ctx: &Ctx, outcomes: &[Outcome]) -> Result<()> {
             } else {
                 "-".to_string()
             };
-            ctx.log(&format!(
-                "{:<14} {:<8} {:>9} {:>14}  {}",
-                o.name,
-                status,
+            table.row([
+                o.name.clone(),
+                status.to_string(),
                 fmt_secs(o.secs),
                 steps,
-                o.tags.join(", ")
-            ));
+                o.tags.join(", "),
+            ]);
         }
+        table.print(ctx);
     }
 
     let failures: Vec<&str> = outcomes

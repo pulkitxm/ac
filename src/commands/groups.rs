@@ -2,7 +2,9 @@ use anyhow::Result;
 
 use crate::cli::{ImageAction, NetworkAction, RegistryAction, SystemAction, VolumeAction};
 use crate::core::ctx::Ctx;
-use crate::core::util::{exit_ok, fmt_date, fmt_size, host_arch, print_pretty_json, short_ref};
+use crate::core::util::{
+    exit_ok, fmt_date, fmt_size, host_arch, print_pretty_json, short_ref, Table,
+};
 use crate::daemon::{self, supervisor};
 use crate::manifest;
 
@@ -140,21 +142,18 @@ pub fn ps(ctx: &Ctx, all: bool, ids: bool) -> Result<()> {
         return ctx.emit_json(&serde_json::Value::Array(items));
     }
 
-    ctx.log(&crate::core::style::bold(&format!(
-        "{:<22} {:<10} {:<12} {:<10} {:<18} {}",
-        "CONTAINER", "PROJECT", "SERVICE", "STATE", "IP", "IMAGE"
-    )));
+    let mut table = Table::new(&["CONTAINER", "PROJECT", "SERVICE", "STATE", "IP", "IMAGE"]);
     for r in &rows {
-        ctx.log(&format!(
-            "{:<22} {:<10} {:<12} {:<10} {:<18} {}",
-            r.id,
+        table.row([
+            r.id.as_str(),
             r.project.as_deref().unwrap_or("-"),
             r.service.as_deref().unwrap_or("-"),
-            r.state,
+            r.state.as_str(),
             r.ip.as_deref().unwrap_or("-"),
             r.image.as_deref().unwrap_or("-"),
-        ));
+        ]);
     }
+    table.print(ctx);
     Ok(())
 }
 
@@ -222,18 +221,17 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
                 })
                 .collect();
             rows.sort();
-            let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
-            let tag_w = rows.iter().map(|r| r.1.len()).max().unwrap_or(3).max(3);
-            ctx.log(&crate::core::style::bold(&format!(
-                "{:<name_w$}  {:<tag_w$}  {:<7} {:>9}  {}",
-                "NAME", "TAG", "ARCH", "SIZE", "CREATED"
-            )));
+            let mut table = Table::new(&["NAME", "TAG", "ARCH", "SIZE", "CREATED"]).right(&[3]);
             for (repo, tag, arch, size, created) in &rows {
-                ctx.log(&format!(
-                    "{repo:<name_w$}  {tag:<tag_w$}  {arch:<7} {:>9}  {created}",
-                    fmt_size(*size)
-                ));
+                table.row([
+                    repo.clone(),
+                    tag.clone(),
+                    arch.clone(),
+                    fmt_size(*size),
+                    created.clone(),
+                ]);
             }
+            table.print(ctx);
             ctx.dim("one row per tag, sized for this machine; every variant: ac image ls -v");
             Ok(())
         }
@@ -350,16 +348,11 @@ pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
                 })
                 .collect();
             rows.sort();
-            let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
-            ctx.log(&crate::core::style::bold(&format!(
-                "{:<name_w$}  {:<7} {:<7} {}",
-                "NAME", "DRIVER", "FORMAT", "CREATED"
-            )));
+            let mut table = Table::new(&["NAME", "DRIVER", "FORMAT", "CREATED"]);
             for (name, driver, format, created) in &rows {
-                ctx.log(&format!(
-                    "{name:<name_w$}  {driver:<7} {format:<7} {created}"
-                ));
+                table.row([name, driver, format, created]);
             }
+            table.print(ctx);
             Ok(())
         }
         VolumeAction::Create { name } => passthrough(

@@ -694,26 +694,18 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                         return ctx.emit_json(&serde_json::Value::Array(items));
                     }
 
-                    let w = sized
-                        .iter()
-                        .map(|(_, i, _)| i.len())
-                        .max()
-                        .unwrap_or(5)
-                        .max(5);
-                    println!(
-                        "{}",
-                        style::bold(&format!(
-                            "{:<14} {:<w$}  {:>9}  {}",
-                            "NAME", "IMAGE", "SIZE", "LOCAL"
-                        ))
-                    );
+                    let mut table =
+                        util::Table::new(&["NAME", "IMAGE", "SIZE", "LOCAL"]).right(&[2]);
                     for (n, i, size) in &sized {
                         let (size_col, local_col) = match (local.is_some(), size) {
                             (false, _) => ("-".to_string(), "?".to_string()),
                             (true, Some(b)) => (util::fmt_size(*b), "yes".to_string()),
                             (true, None) => ("-".to_string(), "no".to_string()),
                         };
-                        println!("{n:<14} {i:<w$}  {size_col:>9}  {local_col}");
+                        table.row([n.clone(), i.clone(), size_col, local_col]);
+                    }
+                    for line in table.lines() {
+                        println!("{line}");
                     }
                     if local.is_none() {
                         ctx.dim("daemon not running, so local presence is unknown");
@@ -845,12 +837,12 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                     if !present {
                         ctx.warn("container daemon is not running, existence is unknown");
                     }
-                    println!(
-                        "{}",
-                        style::bold(&format!("{:<16} {:<26} {}", "NAME", "VOLUME", "STATE"))
-                    );
+                    let mut table = util::Table::new(&["NAME", "VOLUME", "STATE"]);
                     for (short, full) in &declared {
-                        println!("{short:<16} {full:<26} {}", state(full));
+                        table.row([short.as_str(), full.as_str(), state(full)]);
+                    }
+                    for line in table.lines() {
+                        println!("{line}");
                     }
                     Ok(())
                 }

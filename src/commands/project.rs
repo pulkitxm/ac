@@ -12,6 +12,7 @@ use crate::build::{interpolate, Vars};
 use crate::core::ctx::Ctx;
 use crate::core::state::Snapshot;
 use crate::core::style;
+use crate::core::util::Table;
 use crate::daemon::{self, supervisor};
 use crate::manifest::{json_scalar, Project, Service};
 
@@ -783,23 +784,20 @@ pub fn print_status(ctx: &Ctx, proj: &Project, rows: &[ServiceStatus]) {
             proj.name
         ));
     }
-    ctx.log(&style::bold(&format!(
-        "{:<22} {:<10} {:<18} {}",
-        "CONTAINER", "STATE", "IP", "PORTS"
-    )));
+    let mut table = Table::new(&["CONTAINER", "STATE", "IP", "PORTS"]);
     for r in rows {
-        ctx.log(&format!(
-            "{:<22} {:<10} {:<18} {}",
-            r.container,
-            r.state,
+        table.row([
+            r.container.clone(),
+            r.state.clone(),
             r.ip.clone().unwrap_or_else(|| "-".into()),
             if r.ports.is_empty() {
                 "-".to_string()
             } else {
                 r.ports.join(",")
-            }
-        ));
+            },
+        ]);
     }
+    table.print(ctx);
 }
 
 pub fn status_json(rows: &[ServiceStatus]) -> serde_json::Value {
