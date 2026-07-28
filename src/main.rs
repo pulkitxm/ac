@@ -5,6 +5,7 @@ mod cli;
 mod completions;
 mod ctx;
 mod daemon;
+mod docker;
 mod global;
 mod manifest;
 mod progress;
@@ -271,6 +272,145 @@ fn run(cli: Cli) -> Result<()> {
         ),
         TopCommand::Df => global::system(&ctx, Some(&cli::SystemAction::Df)),
         TopCommand::Prune => global::system(&ctx, Some(&cli::SystemAction::Prune { all: false })),
+
+        TopCommand::Run {
+            opts,
+            rm,
+            image,
+            command,
+        } => exit_like(docker::run(&ctx, opts, *rm, image, command)?),
+        TopCommand::Create {
+            opts,
+            rm,
+            image,
+            command,
+        } => exit_like(docker::create(&ctx, opts, *rm, image, command)?),
+        TopCommand::Build {
+            tags,
+            file,
+            target,
+            platform,
+            arch,
+            os,
+            build_args,
+            labels,
+            secrets,
+            no_cache,
+            pull,
+            progress,
+            output,
+            cpus,
+            memory,
+            build_quiet,
+            context,
+        } => docker::build(
+            &ctx,
+            &docker::BuildArgs {
+                tags,
+                file: file.as_deref(),
+                target: target.as_deref(),
+                platform: platform.as_deref(),
+                arch: arch.as_deref(),
+                os: os.as_deref(),
+                build_args,
+                labels,
+                secrets,
+                no_cache: *no_cache,
+                pull: *pull,
+                progress: progress.as_deref(),
+                output: output.as_deref(),
+                cpus: *cpus,
+                memory: memory.as_deref(),
+                build_quiet: *build_quiet,
+                context,
+            },
+        ),
+        TopCommand::Start {
+            attach,
+            interactive,
+            containers,
+        } => docker::start(&ctx, containers, *attach, *interactive),
+        TopCommand::Stop {
+            time,
+            signal,
+            all,
+            containers,
+        } => docker::stop(&ctx, containers, *time, signal.as_deref(), *all),
+        TopCommand::Restart { time, containers } => docker::restart(&ctx, containers, *time),
+        TopCommand::Rm {
+            force,
+            all,
+            containers,
+        } => docker::rm(&ctx, containers, *force, *all),
+        TopCommand::Exec {
+            tty,
+            detach,
+            env,
+            workdir,
+            user,
+            container,
+            command,
+            ..
+        } => exit_like(docker::exec(
+            &ctx,
+            container,
+            command,
+            *tty,
+            *detach,
+            env,
+            workdir.as_deref(),
+            user.as_deref(),
+        )?),
+        TopCommand::Sh { container } => exit_like(docker::sh(&ctx, container)?),
+        TopCommand::Logs {
+            follow,
+            tail,
+            boot,
+            container,
+        } => exit_like(docker::logs(&ctx, container, *follow, *tail, *boot)?),
+        TopCommand::Inspect { containers } => docker::inspect(&ctx, containers),
+        TopCommand::Kill {
+            signal,
+            all,
+            containers,
+        } => docker::kill(&ctx, containers, signal, *all),
+        TopCommand::Cp { src, dst } => docker::cp(&ctx, src, dst),
+        TopCommand::Export { container, output } => {
+            docker::export(&ctx, container, output.as_deref())
+        }
+        TopCommand::Stats {
+            no_stream,
+            containers,
+        } => docker::stats(&ctx, containers, *no_stream),
+        TopCommand::Top { containers } => docker::top(&ctx, containers),
+        TopCommand::Port { container } => docker::port(&ctx, container),
+        TopCommand::Pull {
+            reference,
+            platform,
+        } => docker::pull(&ctx, reference, platform.as_deref()),
+        TopCommand::Push {
+            reference,
+            platform,
+        } => docker::push(&ctx, reference, platform.as_deref()),
+        TopCommand::Tag { source, target } => docker::tag(&ctx, source, target),
+        TopCommand::Save { reference, output } => docker::save(&ctx, reference, output),
+        TopCommand::Load { input } => docker::load(&ctx, input),
+        TopCommand::Login {
+            server,
+            username,
+            password,
+            password_stdin,
+        } => docker::login(
+            &ctx,
+            server,
+            username.as_deref(),
+            password.as_deref(),
+            *password_stdin,
+        ),
+        TopCommand::Logout { server } => docker::logout(&ctx, server),
+        TopCommand::Builder { action } => docker::builder(&ctx, action.as_ref()),
+        TopCommand::Machine { args } => docker::machine(&ctx, args),
+
         TopCommand::Supervise => supervisor::run_loop(&ctx),
         TopCommand::Project { name, action } => {
             let proj = manifest::load_project(&ctx.config_dir, &ctx.ac_home, name)?;

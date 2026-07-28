@@ -204,6 +204,396 @@ pub enum TopCommand {
     /// Print the ac version.
     Version,
 
+    /// Run a container from an image, docker run style. No manifest needed.
+    ///
+    /// Runs: container run [options] <image> [command...]
+    ///
+    /// The container is labelled `ac.managed=1`, so if ac had to start the
+    /// daemon for it, the supervisor counts it and will not stop the daemon
+    /// while it is alive. `-t` is only passed when stdin AND stdout are
+    /// terminals, because Apple `container` fails with ENODEV otherwise.
+    ///
+    /// Examples:
+    ///   ac run -d --name web -p 3000:3000 my-app:dev
+    ///   ac run --rm -it docker.io/library/alpine:3.20 sh
+    Run {
+        #[command(flatten)]
+        opts: RunOpts,
+        /// Remove the container when it exits.
+        #[arg(long = "rm")]
+        rm: bool,
+        /// Image reference to run.
+        image: String,
+        /// Command and arguments, overriding the image default.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// Create a container without starting it, docker create style.
+    ///
+    /// Runs: container create [options] <image> [command...]
+    /// Start it later with `ac start <name>`.
+    Create {
+        #[command(flatten)]
+        opts: RunOpts,
+        /// Remove the container when it exits.
+        #[arg(long = "rm")]
+        rm: bool,
+        /// Image reference to create from.
+        image: String,
+        /// Command and arguments, overriding the image default.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
+
+    /// Build an image from a Dockerfile, docker build style. No manifest needed.
+    ///
+    /// Runs: container build [options] <context>
+    ///
+    /// For a project's declared builds, with profiles, interpolated tags and
+    /// rollout hooks, use `ac <project> build` instead.
+    ///
+    /// Examples:
+    ///   ac build -t my-app:dev .
+    ///   ac build -t my-app:dev -f docker/Dockerfile --target runner .
+    Build {
+        /// Name for the built image, repeatable.
+        #[arg(short = 't', long = "tag", value_name = "NAME")]
+        tags: Vec<String>,
+        /// Path to the Dockerfile.
+        #[arg(short = 'f', long = "file", value_name = "PATH")]
+        file: Option<String>,
+        /// Target build stage.
+        #[arg(long)]
+        target: Option<String>,
+        /// Platform to build for, os/arch[/variant].
+        #[arg(long)]
+        platform: Option<String>,
+        /// Architecture to build for. --platform wins.
+        #[arg(short = 'a', long)]
+        arch: Option<String>,
+        /// OS to build for. --platform wins.
+        #[arg(long)]
+        os: Option<String>,
+        /// Build-time variable, repeatable.
+        #[arg(long = "build-arg", value_name = "KEY=VALUE")]
+        build_args: Vec<String>,
+        /// Image label, repeatable.
+        #[arg(short = 'l', long = "label", value_name = "KEY=VALUE")]
+        labels: Vec<String>,
+        /// Build secret, repeatable (id=<key>[,env=VAR|,src=PATH]).
+        #[arg(long = "secret", value_name = "SPEC")]
+        secrets: Vec<String>,
+        /// Do not use the layer cache.
+        #[arg(long)]
+        no_cache: bool,
+        /// Always attempt to pull a newer base image.
+        #[arg(long)]
+        pull: bool,
+        /// Progress output style.
+        #[arg(long, value_name = "auto|plain|tty")]
+        progress: Option<String>,
+        /// Output configuration, type=<oci|tar|local>[,dest=].
+        #[arg(short = 'o', long, value_name = "SPEC")]
+        output: Option<String>,
+        /// CPUs for the builder container. Resizing discards its cache.
+        #[arg(short = 'c', long = "cpus")]
+        cpus: Option<u32>,
+        /// Memory for the builder container. Resizing discards its cache.
+        #[arg(short = 'm', long = "memory")]
+        memory: Option<String>,
+        /// Suppress build output, docker build -q style.
+        #[arg(short = 'q', long = "build-quiet")]
+        build_quiet: bool,
+        /// Build context directory.
+        #[arg(default_value = ".")]
+        context: String,
+    },
+
+    /// Start one or more stopped containers, docker start style.
+    ///
+    /// Runs: container start <container...>
+    /// For a whole project stack use `ac <project> start`.
+    Start {
+        /// Attach stdout and stderr.
+        #[arg(short = 'a', long)]
+        attach: bool,
+        /// Attach stdin.
+        #[arg(short = 'i', long)]
+        interactive: bool,
+        /// Containers to start.
+        #[arg(required = true)]
+        containers: Vec<String>,
+    },
+
+    /// Stop one or more running containers, docker stop style.
+    ///
+    /// Escalates the way project stop does: a bounded `container stop`, then
+    /// SIGKILL, then the container's own runtime shim, so a wedged container
+    /// still comes down. For a whole project use `ac <project> stop`.
+    Stop {
+        /// Seconds to wait before killing the container.
+        #[arg(short = 't', long = "time", value_name = "SECS")]
+        time: Option<u32>,
+        /// Signal to send instead of the default stop sequence. Passing this
+        /// bypasses ac's stop escalation and calls `container stop --signal`.
+        #[arg(short = 's', long)]
+        signal: Option<String>,
+        /// Stop every running container.
+        #[arg(short = 'a', long)]
+        all: bool,
+        /// Containers to stop.
+        containers: Vec<String>,
+    },
+
+    /// Restart containers: stop then start, docker restart style.
+    Restart {
+        /// Seconds to wait before killing the container.
+        #[arg(short = 't', long = "time", value_name = "SECS")]
+        time: Option<u32>,
+        /// Containers to restart.
+        #[arg(required = true)]
+        containers: Vec<String>,
+    },
+
+    /// Remove containers, docker rm style.
+    ///
+    /// Runs: container rm [--force] <container...>
+    /// Images are `ac image rm` (or `ac rmi`).
+    #[command(alias = "delete")]
+    Rm {
+        /// Remove even if the container is running.
+        #[arg(short, long)]
+        force: bool,
+        /// Remove every container.
+        #[arg(short = 'a', long)]
+        all: bool,
+        /// Containers to remove.
+        containers: Vec<String>,
+    },
+
+    /// Run a command in a running container, docker exec style.
+    ///
+    /// Runs: container exec -i [-t] <container> <command...>
+    /// `-t` is added only when stdin AND stdout are terminals.
+    ///
+    /// Example: ac exec -it web sh
+    Exec {
+        /// Keep stdin open. Always on; accepted for docker muscle memory.
+        #[arg(short = 'i', long)]
+        interactive: bool,
+        /// Request a TTY. Honoured only when stdin and stdout are terminals.
+        #[arg(short = 't', long)]
+        tty: bool,
+        /// Run detached.
+        #[arg(short = 'd', long)]
+        detach: bool,
+        /// Environment entry, repeatable.
+        #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+        env: Vec<String>,
+        /// Working directory inside the container.
+        #[arg(short = 'w', long = "workdir")]
+        workdir: Option<String>,
+        /// User to run as, name|uid[:gid].
+        #[arg(short = 'u', long)]
+        user: Option<String>,
+        /// Container to run in.
+        container: String,
+        /// Command and arguments.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true, required = true)]
+        command: Vec<String>,
+    },
+
+    /// Open a shell in a running container.
+    ///
+    /// Runs bash when the image has it, otherwise sh.
+    ///
+    /// Example: ac sh web
+    #[command(alias = "shell")]
+    Sh {
+        /// Container to enter.
+        container: String,
+    },
+
+    /// Fetch container logs, docker logs style.
+    ///
+    /// Runs: container logs [-f] [-n N] [--boot] <container>
+    Logs {
+        /// Follow log output.
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of lines to show from the end.
+        #[arg(short = 'n', long = "tail", value_name = "N")]
+        tail: Option<u64>,
+        /// Show the VM boot log instead of the container's stdio.
+        #[arg(long)]
+        boot: bool,
+        /// Container to read.
+        container: String,
+    },
+
+    /// Display detailed information about containers, docker inspect style.
+    ///
+    /// Runs: container inspect <container...>
+    /// For images use `ac image inspect`.
+    Inspect {
+        /// Containers to inspect.
+        #[arg(required = true)]
+        containers: Vec<String>,
+    },
+
+    /// Send a signal to containers, docker kill style.
+    ///
+    /// Runs: container kill --signal <SIG> <container...>
+    Kill {
+        /// Signal to send.
+        #[arg(short = 's', long, default_value = "KILL")]
+        signal: String,
+        /// Signal every running container.
+        #[arg(short = 'a', long)]
+        all: bool,
+        /// Containers to signal.
+        containers: Vec<String>,
+    },
+
+    /// Copy files between a container and the host, docker cp style.
+    ///
+    /// Runs: container cp <src> <dst>, where either side may be
+    /// <container>:/path.
+    ///
+    /// Apple container 1.1.0 has known cp bugs: copies INTO a container can
+    /// silently no-op while exiting 0, and copies out can hang. Prefer
+    /// `ac exec` with shell redirection when it matters.
+    #[command(alias = "copy")]
+    Cp {
+        /// Source path, local or <container>:/path.
+        src: String,
+        /// Destination path, local or <container>:/path.
+        dst: String,
+    },
+
+    /// Export a container's filesystem as a tar archive.
+    ///
+    /// Runs: container export -o <output> <container>. Apple container
+    /// refuses to export a RUNNING container, so stop it first.
+    Export {
+        /// Container to export.
+        container: String,
+        /// Output path. Defaults to <container>.tar.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Live resource usage, docker stats style.
+    ///
+    /// --json implies --no-stream and emits one snapshot.
+    Stats {
+        /// Take one sample and exit instead of streaming.
+        #[arg(long)]
+        no_stream: bool,
+        /// Containers to include. Empty means every running one.
+        containers: Vec<String>,
+    },
+
+    /// Processes running inside containers, docker top style.
+    ///
+    /// Runs `ps aux` (falling back to plain `ps`) through `container exec`.
+    Top {
+        /// Containers to show. Empty means every running one.
+        containers: Vec<String>,
+    },
+
+    /// Published port mappings for a container, docker port style.
+    Port {
+        /// Container to show.
+        container: String,
+    },
+
+    /// Pull an image from a registry, docker pull style. Same as
+    /// `ac image pull`.
+    Pull {
+        /// Image reference to pull.
+        reference: String,
+        /// Platform to pull, os/arch[/variant].
+        #[arg(long)]
+        platform: Option<String>,
+    },
+
+    /// Push an image to a registry, docker push style. Same as
+    /// `ac image push`.
+    Push {
+        /// Image reference to push.
+        reference: String,
+        /// Platform to push, os/arch[/variant].
+        #[arg(long)]
+        platform: Option<String>,
+    },
+
+    /// Tag an image, docker tag style. Same as `ac image tag`.
+    Tag {
+        /// Existing image reference.
+        source: String,
+        /// New reference.
+        target: String,
+    },
+
+    /// Save an image to a tar archive, docker save style.
+    Save {
+        /// Image reference to save.
+        reference: String,
+        /// Output path.
+        #[arg(short, long, required = true)]
+        output: PathBuf,
+    },
+
+    /// Load images from a tar archive, docker load style.
+    Load {
+        /// Archive to read.
+        #[arg(short, long, required = true)]
+        input: PathBuf,
+    },
+
+    /// Log in to a registry, docker login style. Same as `ac registry login`.
+    Login {
+        /// Registry host.
+        server: String,
+        /// Username.
+        #[arg(short, long)]
+        username: Option<String>,
+        /// Password. Prefer --password-stdin.
+        #[arg(short, long)]
+        password: Option<String>,
+        /// Read the password from stdin.
+        #[arg(long)]
+        password_stdin: bool,
+    },
+
+    /// Log out of a registry, docker logout style.
+    Logout {
+        /// Registry host.
+        server: String,
+    },
+
+    /// Manage the image builder container, `container builder` style.
+    ///
+    /// Sizing applies only at creation: `ac build -c/-m` stops and recreates
+    /// the builder when a resize is needed, discarding its layer cache.
+    Builder {
+        #[command(subcommand)]
+        action: Option<BuilderAction>,
+    },
+
+    /// Manage container machines, `container machine` style.
+    ///
+    /// Passed through unchanged; ac adds nothing here beyond ensuring the
+    /// daemon for mutating subcommands.
+    #[command(visible_alias = "machines")]
+    Machine {
+        /// Subcommand and arguments, passed to `container machine` verbatim.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
     /// Run an action against a project.
     ///
     /// This is what `ac <project> <action>` expands to. Write it out in full
@@ -221,6 +611,177 @@ pub enum TopCommand {
     /// The detached supervisor loop. Not for direct use.
     #[command(name = "__supervise", hide = true)]
     Supervise,
+}
+
+/// Every flag `container run` and `container create` share. Both docker verbs
+/// take exactly the same set, so they are declared once and flattened into
+/// both.
+#[derive(Args, Debug, Default)]
+pub struct RunOpts {
+    /// Run the container in the background and print its name.
+    #[arg(short = 'd', long)]
+    pub detach: bool,
+    /// Name for the container.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// Environment entry, KEY=VALUE or bare KEY to inherit from the host.
+    #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+    /// File of KEY=VALUE environment entries.
+    #[arg(long = "env-file", value_name = "PATH")]
+    pub env_file: Vec<String>,
+    /// Publish a port, [host-ip:]host-port:container-port[/protocol].
+    #[arg(short = 'p', long = "publish", value_name = "SPEC")]
+    pub publish: Vec<String>,
+    /// Publish a socket, host_path:container_path.
+    #[arg(long = "publish-socket", value_name = "SPEC")]
+    pub publish_socket: Vec<String>,
+    /// Bind mount a volume, source:target.
+    #[arg(short = 'v', long = "volume", value_name = "SPEC")]
+    pub volume: Vec<String>,
+    /// Add a mount, type=<>,source=<>,target=<>,readonly.
+    #[arg(long = "mount", value_name = "SPEC")]
+    pub mount: Vec<String>,
+    /// Add a tmpfs mount at the given path.
+    #[arg(long = "tmpfs", value_name = "PATH")]
+    pub tmpfs: Vec<String>,
+    /// Size of /dev/shm, e.g. 64M.
+    #[arg(long = "shm-size", value_name = "SIZE")]
+    pub shm_size: Option<String>,
+    /// Container label, repeatable.
+    #[arg(short = 'l', long = "label", value_name = "KEY=VALUE")]
+    pub label: Vec<String>,
+    /// CPUs to allocate. This sizes the container's VM, not a cgroup.
+    #[arg(short = 'c', long = "cpus")]
+    pub cpus: Option<u32>,
+    /// Memory to allocate, with optional K, M, G, T or P suffix.
+    #[arg(short = 'm', long = "memory")]
+    pub memory: Option<String>,
+    /// Keep stdin open.
+    #[arg(short = 'i', long)]
+    pub interactive: bool,
+    /// Request a TTY. Honoured only when stdin and stdout are terminals.
+    #[arg(short = 't', long)]
+    pub tty: bool,
+    /// User for the process, name|uid[:gid].
+    #[arg(short = 'u', long)]
+    pub user: Option<String>,
+    /// User ID for the process.
+    #[arg(long)]
+    pub uid: Option<String>,
+    /// Group ID for the process.
+    #[arg(long)]
+    pub gid: Option<String>,
+    /// Initial working directory inside the container.
+    #[arg(short = 'w', long = "workdir", visible_alias = "cwd")]
+    pub workdir: Option<String>,
+    /// Resource limit, <type>=<soft>[:<hard>].
+    #[arg(long = "ulimit", value_name = "LIMIT")]
+    pub ulimit: Vec<String>,
+    /// Override the image entrypoint.
+    #[arg(long)]
+    pub entrypoint: Option<String>,
+    /// Attach to a network, <name>[,mac=..][,mtu=..].
+    #[arg(long)]
+    pub network: Option<String>,
+    /// Platform for a multi-platform image, os/arch[/variant].
+    #[arg(long)]
+    pub platform: Option<String>,
+    /// Architecture for a multi-arch image. --platform wins.
+    #[arg(short = 'a', long)]
+    pub arch: Option<String>,
+    /// OS for a multi-OS image. --platform wins.
+    #[arg(long)]
+    pub os: Option<String>,
+    /// Mount the root filesystem read-only.
+    #[arg(long = "read-only")]
+    pub read_only: bool,
+    /// Add a Linux capability, e.g. CAP_NET_RAW or ALL.
+    #[arg(long = "cap-add", value_name = "CAP")]
+    pub cap_add: Vec<String>,
+    /// Drop a Linux capability.
+    #[arg(long = "cap-drop", value_name = "CAP")]
+    pub cap_drop: Vec<String>,
+    /// Run an init process that forwards signals and reaps children.
+    #[arg(long)]
+    pub init: bool,
+    /// Custom init image.
+    #[arg(long = "init-image", value_name = "IMAGE")]
+    pub init_image: Option<String>,
+    /// Custom kernel path.
+    #[arg(short = 'k', long = "kernel", value_name = "PATH")]
+    pub kernel: Option<String>,
+    /// Runtime handler.
+    #[arg(long)]
+    pub runtime: Option<String>,
+    /// DNS nameserver IP address.
+    #[arg(long = "dns", value_name = "IP")]
+    pub dns: Vec<String>,
+    /// Default DNS domain.
+    #[arg(long = "dns-domain", value_name = "DOMAIN")]
+    pub dns_domain: Option<String>,
+    /// DNS option.
+    #[arg(long = "dns-option", value_name = "OPTION")]
+    pub dns_option: Vec<String>,
+    /// DNS search domain.
+    #[arg(long = "dns-search", value_name = "DOMAIN")]
+    pub dns_search: Vec<String>,
+    /// Do not configure DNS in the container.
+    #[arg(long = "no-dns")]
+    pub no_dns: bool,
+    /// Forward the SSH agent socket into the container.
+    #[arg(long)]
+    pub ssh: bool,
+    /// Enable Rosetta in the container.
+    #[arg(long)]
+    pub rosetta: bool,
+    /// Expose virtualization capabilities to the container.
+    #[arg(long)]
+    pub virtualization: bool,
+    /// Write the container ID to this path.
+    #[arg(long = "cidfile", value_name = "PATH")]
+    pub cidfile: Option<String>,
+    /// Registry scheme: http, https or auto.
+    #[arg(long)]
+    pub scheme: Option<String>,
+    /// Progress output style.
+    #[arg(long)]
+    pub progress: Option<String>,
+    /// Maximum concurrent image layer downloads.
+    #[arg(long = "max-concurrent-downloads", value_name = "N")]
+    pub max_concurrent_downloads: Option<u32>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum BuilderAction {
+    /// Show the builder container's status.
+    ///
+    /// Runs: container builder status
+    Status,
+    /// Start the builder container.
+    ///
+    /// Runs: container builder start
+    Start {
+        /// CPUs for the builder. Applied only at creation.
+        #[arg(short = 'c', long)]
+        cpus: Option<u32>,
+        /// Memory for the builder. Applied only at creation.
+        #[arg(short = 'm', long)]
+        memory: Option<String>,
+    },
+    /// Stop the builder container.
+    ///
+    /// Runs: container builder stop
+    Stop,
+    /// Delete the builder container, discarding its layer cache.
+    ///
+    /// Runs: container builder delete
+    #[command(alias = "rm")]
+    Delete {
+        /// Delete the builder even if it is running.
+        #[arg(short, long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -855,6 +1416,36 @@ pub const RESERVED: &[&str] = &[
     "project",
     "rmi",
     "help",
+    "run",
+    "build",
+    "create",
+    "start",
+    "stop",
+    "restart",
+    "rm",
+    "delete",
+    "exec",
+    "sh",
+    "shell",
+    "logs",
+    "inspect",
+    "kill",
+    "cp",
+    "copy",
+    "export",
+    "stats",
+    "top",
+    "port",
+    "pull",
+    "push",
+    "tag",
+    "save",
+    "load",
+    "login",
+    "logout",
+    "builder",
+    "machine",
+    "machines",
     "__supervise",
 ];
 
