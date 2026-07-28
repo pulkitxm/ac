@@ -1,0 +1,163 @@
+{
+  "name": "shop",
+  "description": "example project: local backing services plus ECR build profiles",
+  "root": "/Users/me/code/shop",
+  "region": "us-east-1",
+  "builder": {
+    "cpus": 8,
+    "memory": "8g"
+  },
+  "profiles": {
+    "local": {
+      "platform": "linux/arm64",
+      "push": false,
+      "tag": "dev-local",
+      "registry": ""
+    },
+    "dev": {
+      "platform": "linux/amd64",
+      "push": true,
+      "account": "111111111111",
+      "tag": "dev",
+      "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"
+    },
+    "pre-prod": {
+      "platform": "linux/amd64",
+      "push": true,
+      "account": "222222222222",
+      "tag": "preprod",
+      "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"
+    },
+    "prod": {
+      "platform": "linux/amd64",
+      "push": true,
+      "account": "222222222222",
+      "tag": "latest",
+      "registry": "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"
+    }
+  },
+  "registries": [
+    {
+      "server": "{{account}}.dkr.ecr.{{region}}.amazonaws.com",
+      "username": "AWS",
+      "passwordCmd": [
+        "aws",
+        "ecr",
+        "get-login-password",
+        "--region",
+        "{{region}}"
+      ]
+    }
+  ],
+  "builds": [
+    {
+      "name": "web",
+      "dockerfile": "apps/web/Dockerfile",
+      "context": ".",
+      "target": "runner",
+      "image": "{{registry}}shop-web",
+      "tags": [
+        "{{tag}}"
+      ],
+      "buildArgs": {
+        "BUILDKIT_INLINE_CACHE": "1"
+      }
+    },
+    {
+      "name": "workers",
+      "dockerfile": "apps/workers/Dockerfile",
+      "context": ".",
+      "target": "runner",
+      "image": "{{registry}}shop-workers",
+      "tags": [
+        "{{version}}-{{git.shortSha}}{{git.dirtySuffix}}",
+        "latest"
+      ],
+      "buildArgs": {
+        "BUILDKIT_INLINE_CACHE": "1"
+      }
+    }
+  ],
+  "services": [
+    {
+      "name": "postgres",
+      "image": "docker.io/library/postgres:16-alpine",
+      "cpus": 2,
+      "memory": "1g",
+      "ports": [
+        "5433:5432"
+      ],
+      "env": {
+        "POSTGRES_USER": "user",
+        "POSTGRES_PASSWORD": "pass",
+        "POSTGRES_DB": "postgres",
+        "PGDATA": "/var/lib/postgresql/data/pgdata"
+      },
+      "volumes": [
+        {
+          "name": "postgres-data",
+          "target": "/var/lib/postgresql/data"
+        }
+      ],
+      "readyCmd": [
+        "pg_isready",
+        "-U",
+        "user",
+        "-d",
+        "postgres"
+      ],
+      "readyTimeout": 90
+    },
+    {
+      "name": "clickhouse",
+      "image": "docker.io/clickhouse/clickhouse-server:24-alpine",
+      "cpus": 4,
+      "memory": "4g",
+      "ports": [
+        "8124:8123",
+        "9000:9000"
+      ],
+      "env": {
+        "CLICKHOUSE_DB": "default"
+      },
+      "volumes": [
+        {
+          "name": "clickhouse-data",
+          "target": "/var/lib/clickhouse"
+        }
+      ],
+      "readyCmd": [
+        "clickhouse-client",
+        "--query",
+        "SELECT 1"
+      ],
+      "readyTimeout": 120
+    },
+    {
+      "name": "redis",
+      "image": "docker.io/library/redis:7-alpine",
+      "cpus": 2,
+      "memory": "1g",
+      "ports": [
+        "6379:6379"
+      ],
+      "args": [
+        "redis-server",
+        "--appendonly",
+        "yes"
+      ],
+      "volumes": [
+        {
+          "name": "redis-data",
+          "target": "/data"
+        }
+      ],
+      "readyCmd": [
+        "sh",
+        "-c",
+        "redis-cli ping | grep PONG"
+      ],
+      "readyTimeout": 90
+    }
+  ]
+}

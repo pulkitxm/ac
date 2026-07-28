@@ -44,8 +44,8 @@ offers "ac <tab>"        "shop"      1 ac ""
 offers "ac <tab>"        "status"      1 ac ""
 offers "ac <tab>"        "project"     1 ac ""
 offers "ac <tab>"        "--json"      1 ac ""
-offers "ac no<tab>"      "shop"      1 ac no
-omits  "ac no<tab>"      "status"      1 ac no
+offers "ac sho<tab>"     "shop"      1 ac sho
+omits  "ac sho<tab>"     "status"      1 ac sho
 
 echo "project actions, bare form"
 for action in start stop down restart ls logs exec sh stats inspect kill rm \
@@ -134,7 +134,7 @@ offers "ac guide <tab>"    "claude"   2 ac guide ""
 
 echo "escape hatch project names"
 offers "ac project <tab>"     "shop"   2 ac project ""
-offers "ac project no<tab>"   "shop"   2 ac project no
+offers "ac project sho<tab>"  "shop"   2 ac project sho
 
 echo "new flags"
 offers "stop flags"  "--time"      3 ac shop stop ""
