@@ -1,8 +1,9 @@
 # ac
 
-A small CLI for running project-scoped service stacks on Apple's
-[`container`](https://github.com/apple/container), filling the gap left by the
-absence of `docker compose`.
+A CLI for Apple's [`container`](https://github.com/apple/container) that
+replaces both halves of docker on macOS: `ac run` / `ac build` / `ac logs` for
+one-off containers and images, and `ac <project> start` for whole service
+stacks, filling the gap left by the absence of `docker compose`.
 
 ```console
 $ ac shop start
@@ -56,7 +57,10 @@ build the binary.
    ```
 
    For bash, use `COMPLETE=bash` in `~/.bashrc`. Completion covers projects,
-   actions, service names, flags and signal names.
+   actions, service names, flags, signal names, and — from the live daemon —
+   container names, image references and registry hosts. The daemon-backed
+   ones are bounded and fail silently, so TAB is never slower than a moment
+   even with the daemon down; `AC_COMPLETE_OFFLINE=1` disables them.
 
 ## Quickstart
 
@@ -172,14 +176,40 @@ ac network ls|create|rm|inspect|prune
 ac system info|df|start|stop|prune|logs
 ac registry login|logout|ls
 ac daemon status | stop            who owns the daemon; stop only if ac's
+ac builder status|start|stop|delete   the shared image builder
+ac machine [args...]               container machine, passed through
 ac guide [claude]                  built-in manual; claude prints a CLAUDE.md snippet
 ac config | schema                 resolved configuration; manifest schema
 ```
 
-Global noun groups mirror docker: `ac ps`, `ac image ls`, `ac volume prune`
-and friends map straight onto the underlying `container` commands, with
-`--json` on every read. `ac system start`/`stop` respect the ownership rule:
-ac never stops a daemon it did not start.
+No manifest needed, the plain docker CLI:
+
+```
+ac build -t app:dev .              build a Dockerfile in this directory
+ac run -d -p 3000:3000 app:dev     run it, and print the URL
+ac create|start|stop|restart|rm    container lifecycle, by container name
+ac exec [-it] <c> <cmd...>         run a command inside one
+ac sh <c>                          bash if the image has it, else sh
+ac logs [-f] [-n N] <c>            container logs
+ac inspect|port|stats|top <c>      what it is, what it publishes, what it uses
+ac cp <src> <dst>                  either side may be <container>:/path
+ac export <c> [-o file]            filesystem tarball (container must be stopped)
+ac kill [-s SIG] <c...>            signal it
+ac pull|push|tag|save|load         image verbs, docker spelling
+ac login|logout <server>           registry credentials
+```
+
+Both surfaces mirror docker: the noun groups (`ac ps`, `ac image ls`,
+`ac volume prune`) and the verbs (`ac run`, `ac build`, `ac logs`) map straight
+onto the underlying `container` commands, with `--json` on every read.
+`ac system start`/`stop` respect the ownership rule: ac never stops a daemon it
+did not start. Containers made by `ac run` are labelled `ac.managed=1` so they
+hold that daemon up for as long as they live.
+
+Use `ac <project> <verb>` when a manifest declares the thing, because only that
+form does readiness gating, named volumes and filtered registry login. Use the
+bare verbs for everything else, and do not write a manifest just to run one
+container.
 
 ## Builds
 

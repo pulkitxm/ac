@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::style;
+use crate::core::style;
 
 pub const AC_VERSION: &str = env!("CARGO_PKG_VERSION");
 

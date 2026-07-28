@@ -1,3 +1,5 @@
+pub mod schema;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -427,5 +429,36 @@ mod tests {
         .err()
         .unwrap();
         assert!(err.to_string().contains("build 'b'"), "{err}");
+    }
+
+    fn proj_fixture() -> Project {
+        let raw = r#"{
+            "name": "demo",
+            "services": [
+              { "name": "redis", "image": "docker.io/library/redis:7-alpine" },
+              { "name": "web", "image": "docker.io/library/nginx:alpine" }
+            ]
+        }"#;
+        Project {
+            name: "demo".into(),
+            file: std::path::PathBuf::from("/tmp/demo.json"),
+            manifest: serde_json::from_str(raw).unwrap(),
+            raw: raw.into(),
+        }
+    }
+
+    #[test]
+    fn services_resolve_in_either_form() {
+        let p = proj_fixture();
+        assert!(p.has_service("redis"));
+        assert!(p.has_service("demo-redis"));
+        assert!(!p.has_service("nope"));
+        assert_eq!(p.target_services(&[]).unwrap(), vec!["redis", "web"]);
+        assert_eq!(
+            p.target_services(&["demo-web".to_string()]).unwrap(),
+            vec!["web"]
+        );
+        let err = p.target_services(&["nope".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("redis web"), "{err}");
     }
 }

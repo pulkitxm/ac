@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::ctx::Ctx;
+use crate::core::ctx::Ctx;
 
 #[derive(Debug, Clone, Deserialize)]
 struct RawNetwork {
@@ -15,11 +15,19 @@ struct RawStatus {
     networks: Vec<RawNetwork>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RawConfiguration {
+    #[serde(default)]
+    labels: std::collections::HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct RawContainer {
     id: String,
     #[serde(default)]
     status: Option<RawStatus>,
+    #[serde(default)]
+    configuration: Option<RawConfiguration>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +35,7 @@ pub struct ContainerInfo {
     pub id: String,
     pub state: String,
     pub ip: Option<String>,
+    pub ac_managed: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,10 +75,15 @@ impl Snapshot {
                         .as_ref()
                         .and_then(|s| s.networks.first())
                         .and_then(|n| n.ipv4_address.clone());
+                    let labels = c.configuration.as_ref().map(|cfg| &cfg.labels);
+                    let ac_managed = labels
+                        .map(|l| l.contains_key("ac.managed") || l.contains_key("ac.project"))
+                        .unwrap_or(false);
                     ContainerInfo {
                         id: c.id,
                         state,
                         ip,
+                        ac_managed,
                     }
                 })
                 .collect(),
@@ -109,17 +123,15 @@ pub fn ac_running_containers(ctx: &Ctx, silent: bool) -> Vec<String> {
             owned.push(format!("{}-{}", p.name, s.name));
         }
     }
-    if owned.is_empty() {
-        return Vec::new();
-    }
     let snap = if silent {
         Snapshot::query_silent(ctx)
     } else {
         Snapshot::query(ctx)
     };
-    snap.running_names()
-        .into_iter()
-        .filter(|n| owned.iter().any(|o| o == n))
-        .map(|s| s.to_string())
+    snap.items
+        .iter()
+        .filter(|c| c.state == "running")
+        .filter(|c| c.ac_managed || owned.iter().any(|o| o == &c.id))
+        .map(|c| c.id.clone())
         .collect()
 }

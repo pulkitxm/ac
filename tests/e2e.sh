@@ -221,7 +221,9 @@ restore() {
     "$AC" actest1 down >/dev/null 2>&1
     "$AC" actest2 down >/dev/null 2>&1
     container volume rm actest1-alpha-data >/dev/null 2>&1
+    container rm --force ac-e2e-run >/dev/null 2>&1
     container image rm ac-e2e-tiny:e2e >/dev/null 2>&1
+    container image rm ac-e2e-http:e2e >/dev/null 2>&1
     rm -f "$PROJ_DIR/actest1.json" "$PROJ_DIR/actest2.json"
     rm -rf "$BUILD_ROOT"
     note "test project, containers, volume and image removed"
@@ -456,6 +458,75 @@ print('ok' if isinstance(d,list) else 'bad')
   err=$("$AC" exec somesvc true 2>&1); rc=$?
   check "l17 top-level docker verbs hint at project form" "$([ $rc -ne 0 ] && echo nonzero || echo zero)" "nonzero"
   check_contains "l18 the hint names the fix" "$err" "ac <project> exec"
+
+scen "o. manifest-free docker verbs: build, run, and a reachable URL"
+  RUNC="ac-e2e-run"
+  RUNIMG="ac-e2e-http:e2e"
+  cat > "$BUILD_ROOT/Dockerfile.http" <<'DOCKER'
+FROM docker.io/library/busybox:1.36
+RUN mkdir -p /srv && echo 'ac-e2e-ok' > /srv/index.html
+EXPOSE 8080
+CMD ["httpd", "-f", "-p", "8080", "-h", "/srv"]
+DOCKER
+
+  "$AC" --quiet build -t "$RUNIMG" -f "$BUILD_ROOT/Dockerfile.http" "$BUILD_ROOT" >/dev/null 2>&1
+  check "o1 ac build produced the image" \
+    "$(container image ls -q 2>/dev/null | grep -c "^ac-e2e-http$")" "1"
+
+  out=$("$AC" run -d --name "$RUNC" -p 18100:8080 "$RUNIMG" 2>&1)
+  check "o2 ac run started it"          "$(cstate $RUNC)" "running"
+  check_contains "o3 ac run printed the URL" "$out" "http://localhost:18100"
+
+  body=""
+  waited=0
+  while [ $waited -lt 20 ]; do
+    body=$(curl -s --max-time 2 http://localhost:18100/ 2>/dev/null)
+    [ -n "$body" ] && break
+    sleep 1; waited=$((waited+1))
+  done
+  check "o4 the published port actually serves" "$(printf '%s' "$body" | tr -d '\n')" "ac-e2e-ok"
+
+  check "o5 it carries the ac.managed label" \
+    "$(container inspect $RUNC 2>/dev/null | python3 -c "
+import json,sys
+print(json.load(sys.stdin)[0]['configuration']['labels'].get('ac.managed','missing'))
+" 2>&1)" "1"
+
+  check "o6 the refcount counts it even though no manifest declares it" \
+    "$("$AC" --json ps 2>/dev/null | python3 -c "
+import json,sys
+print('yes' if any(r.get('container')=='$RUNC' for r in json.load(sys.stdin)) else 'no')
+" 2>&1)" "yes"
+
+  got=$("$AC" --json port "$RUNC" 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+print(d[0]['hostPort'] if d else 'none')
+" 2>&1)
+  check "o7 ac port reports the mapping" "$got" "18100"
+
+  check "o8 ac exec runs inside it" \
+    "$("$AC" --quiet exec "$RUNC" cat /srv/index.html 2>/dev/null | tr -d '\n')" "ac-e2e-ok"
+
+  check_contains "o9 ac logs reads it" "$("$AC" --quiet logs "$RUNC" 2>&1)" ""
+
+  "$AC" --quiet stop "$RUNC" >/dev/null 2>&1
+  check "o10 ac stop stopped it"  "$(cstate $RUNC)" "stopped"
+  "$AC" --quiet start "$RUNC" >/dev/null 2>&1
+  check "o11 ac start restarted it in place" "$(cstate $RUNC)" "running"
+  "$AC" --quiet rm -f "$RUNC" >/dev/null 2>&1
+  check "o12 ac rm removed it"    "$(cstate $RUNC)" "absent"
+
+  err=$("$AC" --quiet stop 2>&1); rc=$?
+  check "o13 bare ac stop refuses rather than no-oping" "$rc" "1"
+  check_contains "o14 and points at the project form" "$err" "ac <project> stop"
+
+  err=$("$AC" --quiet logs actest1 2>&1); rc=$?
+  check "o15 naming a project as a container fails" "$rc" "1"
+  check_contains "o16 with a pointer to the project form" "$err" "is a project"
+
+  container image rm "$RUNIMG" >/dev/null 2>&1
+  rm -f "$BUILD_ROOT/Dockerfile.http"
 
 scen "m. compose-style verbs"
   "$AC" actest1 up >/dev/null 2>&1; rc=$?

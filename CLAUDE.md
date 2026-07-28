@@ -5,17 +5,26 @@ file alone, without reading the source.
 
 ## What ac is
 
-`ac` is a project runner for Apple `container`, the macOS native container
-runtime. Apple ships no `docker compose` equivalent, so there is no way to
-declare "these four services make up my local stack" and bring them up
-together. `ac` is that missing layer: a project is one JSON manifest, and
-`ac <project> start` turns it into running containers.
+`ac` is the CLI for Apple `container`, the macOS native container runtime. It
+covers two gaps, and the split between them is the shape of the whole tool.
+
+The first gap is orchestration. Apple ships no `docker compose` equivalent, so
+there is no way to declare "these four services make up my local stack" and
+bring them up together. `ac` is that missing layer: a project is one JSON
+manifest, and `ac <project> start` turns it into running containers.
+
+The second gap is ergonomics. Apple's `container` CLI is complete but is not
+docker: the verbs sit in different places, the flags differ in small ways, and
+nothing tells you a URL at the end. `ac <verb>` is a docker-compatible surface
+over the same runtime, needing no manifest at all, so `ac build -t app:dev .`
+followed by `ac run -d -p 3000:3000 app:dev` works in any directory with a
+Dockerfile. See [Manifest-free commands](#manifest-free-commands).
 
 It also manages the `container` daemon itself, under a strict ownership rule
 described below, so the daemon is running exactly when it needs to be and is
 never taken away from someone else.
 
-The tool is written in Rust (`src/*.rs`, `Cargo.toml`). Build it with
+The tool is written in Rust. Build it with
 `make build`; the binary lands at `target/release/ac`. It started life as a
 bash script that has since been retired; where the rewrite deliberately
 changed behaviour, see
@@ -42,6 +51,47 @@ a daemon somebody else was using, taking their containers down with it.
   their own, or get stopped with plain `container stop`.
 - Refcounting spans **all** projects. Two projects up, `ac projA down`, and the
   daemon stays up for projB.
+
+### What counts as an ac-managed container
+
+The refcount decides when an ac-owned daemon may be stopped, so what it counts
+is load-bearing. It counts **labels**, not manifest membership.
+
+Every container `ac` creates is labelled:
+
+| Label | Applied by |
+| --- | --- |
+| `ac.project=<name>` | a manifest service, and one-off `ac <project> run` |
+| `ac.managed=1` | `ac run` and `ac create`, which have no project |
+
+`state::ac_running_containers` returns every running container carrying either
+label, unioned with the `<project>-<service>` names the manifests declare. The
+union is belt and braces: the names cover a container created by an older `ac`
+before labelling existed, the labels cover everything with no manifest behind
+it.
+
+This has to be label-based, because the alternative is a bug. If the refcount
+were derived from manifests alone, a container from `ac run` would count as
+zero: `supervisor::settle` would stop the daemon in the same invocation that
+started the container, and the watchdog would stop it about twenty seconds
+later. The same reasoning fixes a pre-existing case, `ac <project> run --keep`,
+whose container is named `<project>-<service>-run-<timestamp>` and so never
+matched the manifest-derived name either.
+
+Two things the label deliberately does not do. It does not make a container
+appear in `ac <project> ls`, which is still a manifest join, and it does not
+give `ac ps` a PROJECT to show, so a labelled container with no manifest prints
+an empty PROJECT column. Discover those with `ac ps`.
+
+A container started with plain `container run` carries no ac label, is never
+counted, and is never ac's to stop. That is the ownership contract applied one
+level down.
+
+`daemon::ensure` records ownership but does **not** spawn the supervisor;
+`supervisor::ensure` does, and is a no-op unless the daemon is ours. Every path
+that starts the daemon and then leaves something running must call both, or the
+daemon is owned and unwatched: `ac run`, `ac create`, `ac start`, `ac restart`,
+`ac system start`, the mutating global passthrough, and `project::start`.
 
 ### The supervisor debounce
 
@@ -86,8 +136,9 @@ pointed at from an untracked `Makefile.local` that sets `CARGO_HOME` and
 | `make test` | Unit tests (`cargo test`). |
 | `make lint` | `cargo clippy --all-targets -- -D warnings`. |
 | `make fmt` | Format the source in place. |
-| `make install` | Build, generate completions, symlink into `BIN_DIR`. |
-| `make completions` | zsh, bash and fish completions into `completions/rust/`. |
+| `make install` | Build, then symlink into `BIN_DIR` and print the shell setup. |
+| `make completions` | Print the shell hook to source. Completions are dynamic, so nothing is written to disk. |
+| `make test-completions` | Drive the real binary and assert every command, flag and value completes. |
 | `make e2e` | Integration tests against real containers. |
 | `make clean` | Remove build artefacts. |
 
@@ -240,13 +291,101 @@ empty for purely local profiles, so one template yields `app:tag` locally and
 
 ## Commands
 
-Usual form is `ac <project> <action> [services...]`. `ac <project>` alone means
-`ac <project> status`. Services resolve from **either** spelling: `redis` or
-`shop-redis`. Naming a service that does not exist fails loudly and lists the
-valid ones.
+There are two forms and they are not aliases of each other.
+
+`ac <project> <action> [services...]` acts on **services** resolved through a
+manifest. `ac <project>` alone means `ac <project> status`. Services resolve
+from **either** spelling: `redis` or `shop-redis`. Naming a service that does
+not exist fails loudly and lists the valid ones.
+
+`ac <action> <container|image>` acts on **one container or image** by its real
+name, with no manifest involved. See
+[Manifest-free commands](#manifest-free-commands).
 
 When a project name collides with one of ac's own commands, use the escape
 hatch `ac -p <project> <action>`.
+
+### Choosing between the two forms
+
+- **The thing is in a manifest: use the project form.** Only it does ordered
+  startup gated on `readyCmd`, named volume creation, registry login filtered
+  to the images actually involved, and service-name resolution. `ac shop
+  restart` restarts a stack; `ac restart shop-redis` restarts one container and
+  knows nothing about readiness.
+- **The thing is not in a manifest: use the global form.** A one-off `ac run`,
+  a container someone else created, an image operation, a Dockerfile with no
+  project around it.
+- **Do not write a manifest to run one container.** That is what `ac run` is
+  for. A manifest earns its keep when several services must come up in order.
+- **The two forms reach the same container but do different amounts of work.**
+  `ac stop shop-redis` and `ac shop stop redis` both stop it and both use the
+  escalation ladder, but only the project form resolves the short service name
+  and reports against the manifest.
+- **When in doubt, `ac ps --json`**: it lists everything on the daemon and
+  attributes what it can to a project.
+
+### Manifest-free commands
+
+Global verbs, added so `ac` covers the plain docker CLI as well as compose.
+Each is a thin, faithful pass to `container`, with ac's ownership contract,
+command echo and `--json` handling layered on.
+
+| Command | What it runs underneath |
+| --- | --- |
+| `run [opts] <image> [cmd...]` | `container run`, plus `--label ac.managed=1`. `-t` only when stdin and stdout are both terminals. Prints `http://localhost:<port>` for each published port after a detached run. |
+| `create [opts] <image> [cmd...]` | `container create`, same flags minus `--progress`, which `container create` does not accept. |
+| `build [-t ref] [-f file] [ctx]` | `container build`. No profiles, no interpolation, no rollout, no build-root resolution: for those use `ac <project> build`. |
+| `start [-a] [-i] <c...>` | `container start` per container, since it takes a single id. |
+| `stop [-t N] [-s SIG] [-a] <c...>` | the escalation ladder from `project::stop_container`: bounded `container stop`, then SIGKILL, then the runtime shim. `-s` bypasses it for a plain `container stop --signal`. |
+| `restart [-t N] <c...>` | stop then start, without releasing the daemon in between. |
+| `rm [-f] [-a] <c...>` | `container rm`. Volumes survive. Images are `ac rmi`. |
+| `exec [-it] [-d] [-e] [-w] [-u] <c> <cmd...>` | `container exec -i [-t] ...` |
+| `sh <c>` | `container exec` running bash when present, else sh. |
+| `logs [-f] [-n N] [--boot] <c>` | `container logs` |
+| `inspect <c...>` | `container inspect`, pretty-printed |
+| `kill [-s SIG] [-a] <c...>` | `container kill --signal` |
+| `cp <src> <dst>` | `container cp`, rewriting `<container>:/path` on either side |
+| `export <c> [-o file]` | `container export`. Refuses on a running container and says to stop it. |
+| `stats [--no-stream] [c...]` | `container stats`. `--json` implies `--no-stream` and is killed after 20s. |
+| `top [c...]` | `ps aux` (fallback `ps`) through `container exec` |
+| `port <c>` | published ports read from `container inspect` |
+| `pull` / `push` / `tag` / `save` / `load` | the matching `container image` verb |
+| `login` / `logout` | `container registry login` / `logout`. `container registry login` has **no** `--password`; ac accepts one and pipes it to `--password-stdin`. |
+| `builder <status\|start\|stop\|delete>` | `container builder ...` |
+| `machine [args...]` | `container machine ...`, passed through verbatim |
+
+Daemon gating splits three ways, extending the read/mutate rule below:
+
+- **Reads** (`logs`, `inspect`, `port`, `stats`, `top`, `export`, `cp`, `exec`,
+  `sh`, `logout`, `save`) call `daemon::require` and fail with a hint rather
+  than starting a daemon for a read.
+- **Mutations that leave nothing behind** (`build`, `pull`, `push`, `tag`,
+  `load`, `login`, `rm`, `kill`, `stop`) ensure the daemon and run the refcount
+  check afterwards, so a daemon started for a one-off is released again.
+- **Mutations that leave a container running** (`run`, `create`, `start`,
+  `restart`) additionally spawn the supervisor, because the daemon must stay up
+  and must still be reaped once the container goes.
+
+Sharp edges worth knowing:
+
+- **`--all` is a whole-daemon blast radius.** `ac stop -a`, `ac rm -a` and
+  `ac kill -a` act on every container the daemon has, including other projects'
+  and other users'. Bare `ac stop` with no target is an error rather than a
+  silent no-op, precisely so nobody reaches for `-a` to make it do something.
+- **`-q` means three things.** Global `--quiet` has no short form; `-q` is
+  "names only" on `ac ps` and `ac image ls`, and `--build-quiet` on `ac build`.
+- **Trailing arguments swallow global flags.** `run`, `exec`, `cp` and
+  `machine` forward everything after their target, so `--json` and `--quiet`
+  must come first: `ac --json machine ls`, not `ac machine --json ls`.
+- **`RESERVED` in `src/cli/reserved.rs` grew by 30 words**, including `run`, `build`,
+  `start`, `stop`, `rm`, `logs`, `exec`, `top`, `port`, `push`, `tag`, `login`
+  and `machine`. A project named after any of them is reachable only as
+  `ac -p <name> ...`. The `every_top_level_command_is_reserved` test keeps
+  `RESERVED` in step with the command enum; without it the two drift and a new
+  subcommand silently parses as a project name.
+- **Container names take `project/service` too**, so `ac logs shop/redis` and
+  `ac logs shop-redis` are the same thing. Naming a project alone is an error
+  that points at `ac <project> status`.
 
 ### Project actions
 
@@ -284,6 +423,10 @@ hatch `ac -p <project> <action>`.
 
 ### Global commands
 
+The noun groups and ac's own commands. The docker-style verbs (`run`, `build`,
+`start`, `logs`, ...) are global too and are tabulated under
+[Manifest-free commands](#manifest-free-commands).
+
 | Command | What it does |
 | --- | --- |
 | `ac ls`, `ac projects` | List discoverable projects. |
@@ -300,14 +443,19 @@ hatch `ac -p <project> <action>`.
 | `ac config` | Resolved `~/.config/ac/config.json`. |
 | `ac schema` | The manifest JSON Schema. |
 | `ac guide [claude]` | The embedded manual (`docs/guide.md`). `claude` prints `docs/claude-snippet.md`, a drop-in block for another repo's CLAUDE.md. |
-| `ac completions <shell>` | zsh, bash, fish, elvish or powershell (power-shell also accepted). |
+| `ac builder <status\|start\|stop\|delete>` | The shared image builder. Sizing applies only at creation, so a resize discards the layer cache. |
+| `ac machine [args...]` | `container machine`, passed through verbatim. Note there is no `machine start`: booting happens via `create` or implicitly via `machine run`. |
+| `ac completions <shell>` | A **static** script for zsh, bash, fish, elvish or powershell. It carries no dynamic values and no project subcommands; the `COMPLETE=<shell>` hook that `make completions` prints is the one to use. |
 | `ac version`, `ac help` | |
 
 Global reads (`ps`, `image ls`, `df`, ...) **require** a running daemon and
 fail with a hint instead of starting one, because a daemon started for a read
 would be silently owned with no supervisor. Mutating globals (`image pull`,
 `registry login`, `prune`, ...) ensure the daemon and run the refcount check
-afterwards, so a daemon started for a one-off command is released again.
+afterwards, so a daemon started for a one-off command is released again. The
+docker-style verbs follow the same rule with one addition, the ones that leave
+a container running; see
+[Manifest-free commands](#manifest-free-commands).
 
 ### Agent facing behaviour
 
@@ -536,6 +684,35 @@ State lives in `~/.local/state/ac/`: `daemon.owned`, `supervisor.pid`,
 Put a manifest in `<repo>/projects/` instead when it should ship with the tool;
 a user file of the same name still wins.
 
+## Source layout
+
+Grouped by responsibility, not by size. Nothing here is deep: one level of
+directory, and every module is named after what it does.
+
+| Path | What lives there |
+| --- | --- |
+| `main.rs` | Entry point and `rewrite_argv`, the shorthand that turns `ac shop start` into `ac project shop start`. Nothing else. |
+| `dispatch.rs` | The match arms: `TopCommand` to a function, and `run_action` for the project verbs. |
+| `core/ctx.rs` | `Ctx` (flags, paths, config) and `Runner`, the only place a subprocess is spawned. Every bounded-timeout variant lives here. |
+| `core/state.rs` | `Snapshot` of `container ls -a`, and the daemon refcount. |
+| `core/style.rs` | The one module that decides whether any ANSI is emitted. |
+| `core/util.rs` | Shared formatting and `exit_ok`. |
+| `cli/root.rs` | `Cli` and `TopCommand`. |
+| `cli/project.rs` | `Action` and the project-scoped nested groups. |
+| `cli/groups.rs` | The noun-group actions: image, volume, network, system, registry, daemon, builder. |
+| `cli/run_opts.rs` | `RunOpts`, the flags `ac run` and `ac create` share. |
+| `cli/reserved.rs` | `RESERVED` and `PROJECT_ACTIONS`. |
+| `commands/docker/` | The manifest-free verbs: `target` resolves a name to a container, `opts` builds run argv, `lifecycle` is the container verbs, `images` the image and registry ones. |
+| `commands/groups.rs` | The noun groups. |
+| `commands/project.rs` | Project lifecycle: start, stop, down, readiness, login. |
+| `build/` | `vars` (interpolation, build root), `builder` (sizing), `plan` (argv per build), `reporter` (the live line), `run` (execution and summary), `rollout` (hooks). |
+| `daemon/` | The ownership contract, with `supervisor` next to it. |
+| `manifest/` | Manifest types and discovery, with `schema` next to it. |
+| `completions.rs` | The completion tree, including the daemon-backed completers. |
+
+Two boundaries worth keeping. `core` may not depend on `commands`, and the
+`cli` modules hold no logic, only clap definitions and their doc comments.
+
 ## Conventions
 
 **No comments in code.** Not in the Rust, not in the Makefile, not in
@@ -546,20 +723,34 @@ documented here at length rather than inline.
 
 Two exceptions, both because they are functional rather than explanatory:
 
-- `///` doc comments in `src/cli.rs`. clap turns these into the `--help` text,
+- `///` doc comments under `src/cli/`. clap turns these into the `--help` text,
   so deleting one deletes user facing output.
 - `##` annotations on Makefile target lines. The `help` target parses them with
   awk to build its own listing.
 
-One non-obvious piece of code, documented here instead of inline:
+Two non-obvious pieces of code, documented here instead of inline.
+
 `src/completions.rs` leaks each project name with `Box::leak` because clap
 wants `'static` names; the completion process emits candidates and exits
-immediately, so the leak is deliberate and harmless.
+immediately, so the leak is deliberate and harmless. Project names that collide
+with a reserved word are skipped, because `ac <that-name>` dispatches to the
+command, not the project, so offering it would complete to something that
+cannot run.
+
+The same file shells out to `container` on every TAB to complete container
+names, image references and registry hosts, which the manifest cannot supply.
+That is why each of those completers is bounded rather than a plain call: a 1s
+`container system status` probe gates a 2s list, both `.silent()`, both
+returning an empty vector on any failure. A wedged or stopped daemon therefore
+makes TAB empty and instant instead of hanging the shell, which is the one
+failure mode that would make people turn completion off. `AC_COMPLETE_OFFLINE=1`
+skips them outright. Do not reach for `Snapshot::query` or
+`daemon::running_silent` here; both are unbounded.
 
 Check for regressions:
 
 ```
-grep -nE '^\s*//' src/*.rs | grep -v '^src/cli.rs'    # expect no output
+grep -rnE '^\s*//' src --include='*.rs' | grep -v '^src/cli/'   # expect no output
 grep -nE '^\s*#' Makefile tests/e2e.sh | grep -v '#!' # expect no output
 ```
 
