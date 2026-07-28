@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use anyhow::{anyhow, Context as _, Result};
@@ -102,6 +103,7 @@ impl Ctx {
         let color =
             !no_color && !json && env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
         owo_colors::set_override(color);
+        set_quiet(quiet);
 
         let ctx = Ctx {
             json,
@@ -409,6 +411,24 @@ impl<'a> Runner<'a> {
     }
 }
 
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+pub fn echo_external<S: AsRef<str>>(prog: &str, args: &[S]) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut line = prog.to_string();
+    for a in args {
+        line.push(' ');
+        line.push_str(&shell_quote(a.as_ref()));
+    }
+    eprintln!("{}", style::dim_err(&format!("$ {line}")));
+}
+
 pub fn home_dir() -> Result<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
@@ -443,6 +463,7 @@ fn ac_home() -> PathBuf {
 }
 
 fn probe_running_app_root() -> Option<String> {
+    echo_external("container", &["system", "status"]);
     let out = Command::new("container")
         .args(["system", "status"])
         .stderr(Stdio::null())
@@ -467,6 +488,7 @@ pub fn parse_app_root(text: &str) -> Option<String> {
 }
 
 pub fn now_stamp() -> String {
+    echo_external("date", &["+%Y%m%d%H%M%S"]);
     Command::new("date")
         .arg("+%Y%m%d%H%M%S")
         .output()

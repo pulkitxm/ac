@@ -92,6 +92,7 @@ pub fn resolve_root(ctx: &Ctx, proj: &Project, ov: &BuildOverrides) -> Result<Pa
 }
 
 fn git_toplevel(dir: &Path) -> Option<PathBuf> {
+    crate::ctx::echo_external("git", &["rev-parse", "--show-toplevel"]);
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(dir)
@@ -242,6 +243,10 @@ pub fn hook_env(proj: &Project, v: &Vars, root: &Path, builds: &[String]) -> Vec
 }
 
 fn git_dir_ok(root: &Path) -> bool {
+    crate::ctx::echo_external(
+        "git",
+        &["-C", &root.to_string_lossy(), "rev-parse", "--git-dir"],
+    );
     std::process::Command::new("git")
         .args(["-C", &root.to_string_lossy(), "rev-parse", "--git-dir"])
         .stdout(std::process::Stdio::null())
@@ -254,6 +259,7 @@ fn git_dir_ok(root: &Path) -> bool {
 fn git(root: &Path, args: &[&str]) -> String {
     let mut a = vec!["-C".to_string(), root.to_string_lossy().to_string()];
     a.extend(args.iter().map(|s| s.to_string()));
+    crate::ctx::echo_external("git", &a);
     std::process::Command::new("git")
         .args(&a)
         .stderr(std::process::Stdio::null())

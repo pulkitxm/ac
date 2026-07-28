@@ -557,8 +557,10 @@ fn stop_args(cname: &str, time: Option<u32>) -> Vec<String> {
 }
 
 fn kill_runtime_shim(cname: &str) -> bool {
+    let pattern = format!("container-runtime-linux.*--uuid {cname}$");
+    crate::ctx::echo_external("pgrep", &["-f", &pattern]);
     let out = std::process::Command::new("pgrep")
-        .args(["-f", &format!("container-runtime-linux.*--uuid {cname}$")])
+        .args(["-f", &pattern])
         .output();
     let Ok(out) = out else {
         return false;
@@ -572,6 +574,7 @@ fn kill_runtime_shim(cname: &str) -> bool {
         return false;
     }
     for pid in &pids {
+        crate::ctx::echo_external("/bin/kill", &["-9", pid]);
         std::process::Command::new("/bin/kill")
             .args(["-9", pid])
             .status()
