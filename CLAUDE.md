@@ -24,7 +24,7 @@ It also manages the `container` daemon itself, under a strict ownership rule
 described below, so the daemon is running exactly when it needs to be and is
 never taken away from someone else.
 
-The tool is written in Rust (`src/*.rs`, `Cargo.toml`). Build it with
+The tool is written in Rust. Build it with
 `make build`; the binary lands at `target/release/ac`. It started life as a
 bash script that has since been retired; where the rewrite deliberately
 changed behaviour, see
@@ -377,7 +377,7 @@ Sharp edges worth knowing:
 - **Trailing arguments swallow global flags.** `run`, `exec`, `cp` and
   `machine` forward everything after their target, so `--json` and `--quiet`
   must come first: `ac --json machine ls`, not `ac machine --json ls`.
-- **`RESERVED` in `src/cli.rs` grew by 30 words**, including `run`, `build`,
+- **`RESERVED` in `src/cli/reserved.rs` grew by 30 words**, including `run`, `build`,
   `start`, `stop`, `rm`, `logs`, `exec`, `top`, `port`, `push`, `tag`, `login`
   and `machine`. A project named after any of them is reachable only as
   `ac -p <name> ...`. The `every_top_level_command_is_reserved` test keeps
@@ -684,6 +684,35 @@ State lives in `~/.local/state/ac/`: `daemon.owned`, `supervisor.pid`,
 Put a manifest in `<repo>/projects/` instead when it should ship with the tool;
 a user file of the same name still wins.
 
+## Source layout
+
+Grouped by responsibility, not by size. Nothing here is deep: one level of
+directory, and every module is named after what it does.
+
+| Path | What lives there |
+| --- | --- |
+| `main.rs` | Entry point and `rewrite_argv`, the shorthand that turns `ac shop start` into `ac project shop start`. Nothing else. |
+| `dispatch.rs` | The match arms: `TopCommand` to a function, and `run_action` for the project verbs. |
+| `core/ctx.rs` | `Ctx` (flags, paths, config) and `Runner`, the only place a subprocess is spawned. Every bounded-timeout variant lives here. |
+| `core/state.rs` | `Snapshot` of `container ls -a`, and the daemon refcount. |
+| `core/style.rs` | The one module that decides whether any ANSI is emitted. |
+| `core/util.rs` | Shared formatting and `exit_ok`. |
+| `cli/root.rs` | `Cli` and `TopCommand`. |
+| `cli/project.rs` | `Action` and the project-scoped nested groups. |
+| `cli/groups.rs` | The noun-group actions: image, volume, network, system, registry, daemon, builder. |
+| `cli/run_opts.rs` | `RunOpts`, the flags `ac run` and `ac create` share. |
+| `cli/reserved.rs` | `RESERVED` and `PROJECT_ACTIONS`. |
+| `commands/docker/` | The manifest-free verbs: `target` resolves a name to a container, `opts` builds run argv, `lifecycle` is the container verbs, `images` the image and registry ones. |
+| `commands/groups.rs` | The noun groups. |
+| `commands/project.rs` | Project lifecycle: start, stop, down, readiness, login. |
+| `build/` | `vars` (interpolation, build root), `builder` (sizing), `plan` (argv per build), `reporter` (the live line), `run` (execution and summary), `rollout` (hooks). |
+| `daemon/` | The ownership contract, with `supervisor` next to it. |
+| `manifest/` | Manifest types and discovery, with `schema` next to it. |
+| `completions.rs` | The completion tree, including the daemon-backed completers. |
+
+Two boundaries worth keeping. `core` may not depend on `commands`, and the
+`cli` modules hold no logic, only clap definitions and their doc comments.
+
 ## Conventions
 
 **No comments in code.** Not in the Rust, not in the Makefile, not in
@@ -694,7 +723,7 @@ documented here at length rather than inline.
 
 Two exceptions, both because they are functional rather than explanatory:
 
-- `///` doc comments in `src/cli.rs`. clap turns these into the `--help` text,
+- `///` doc comments under `src/cli/`. clap turns these into the `--help` text,
   so deleting one deletes user facing output.
 - `##` annotations on Makefile target lines. The `help` target parses them with
   awk to build its own listing.
@@ -721,7 +750,7 @@ skips them outright. Do not reach for `Snapshot::query` or
 Check for regressions:
 
 ```
-grep -nE '^\s*//' src/*.rs | grep -v '^src/cli.rs'    # expect no output
+grep -rnE '^\s*//' src --include='*.rs' | grep -v '^src/cli/'   # expect no output
 grep -nE '^\s*#' Makefile tests/e2e.sh | grep -v '#!' # expect no output
 ```
 
