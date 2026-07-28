@@ -1239,7 +1239,10 @@ mod tests {
 
         assert_eq!(get("AC_IMAGE_WEB"), "reg/web:latest");
         assert_eq!(get("AC_IMAGE_API_WORKERS"), "reg/wrk:latest");
-        assert_eq!(get("AC_IMAGES_API_WORKERS"), "reg/wrk:latest reg/wrk:pinned");
+        assert_eq!(
+            get("AC_IMAGES_API_WORKERS"),
+            "reg/wrk:latest reg/wrk:pinned"
+        );
         assert_eq!(get("AC_IMAGES"), "reg/web:latest");
         assert_eq!(get("AC_BUILDS"), "web");
         assert_eq!(get("AC_PROFILE"), "prod");
