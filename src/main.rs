@@ -14,6 +14,7 @@ mod state;
 mod style;
 mod supervisor;
 
+use std::collections::HashMap;
 use std::io::IsTerminal;
 use std::process::ExitCode;
 
@@ -699,16 +700,53 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             match action.as_ref().unwrap_or(&ImagesAction::Ls) {
                 ImagesAction::Ls => {
                     let rows = list();
+                    let local = local_image_sizes(ctx);
+                    let sized: Vec<(String, String, Option<u64>)> = rows
+                        .iter()
+                        .map(|(n, i)| {
+                            let size = local.as_ref().and_then(|m| lookup_image(m, i));
+                            (n.clone(), i.clone(), size)
+                        })
+                        .collect();
+
                     if ctx.json {
-                        let items: Vec<serde_json::Value> = rows
+                        let items: Vec<serde_json::Value> = sized
                             .iter()
-                            .map(|(n, i)| serde_json::json!({ "name": n, "image": i }))
+                            .map(|(n, i, size)| {
+                                serde_json::json!({
+                                    "name": n,
+                                    "image": i,
+                                    "present": local.is_some().then_some(size.is_some()),
+                                    "size": size,
+                                })
+                            })
                             .collect();
                         return ctx.emit_json(&serde_json::Value::Array(items));
                     }
-                    println!("{}", style::bold(&format!("{:<14} {}", "NAME", "IMAGE")));
-                    for (n, i) in rows {
-                        println!("{n:<14} {i}");
+
+                    let w = sized
+                        .iter()
+                        .map(|(_, i, _)| i.len())
+                        .max()
+                        .unwrap_or(5)
+                        .max(5);
+                    println!(
+                        "{}",
+                        style::bold(&format!(
+                            "{:<14} {:<w$}  {:>9}  {}",
+                            "NAME", "IMAGE", "SIZE", "LOCAL"
+                        ))
+                    );
+                    for (n, i, size) in &sized {
+                        let (size_col, local_col) = match (local.is_some(), size) {
+                            (false, _) => ("-".to_string(), "?".to_string()),
+                            (true, Some(b)) => (global::fmt_size(*b), "yes".to_string()),
+                            (true, None) => ("-".to_string(), "no".to_string()),
+                        };
+                        println!("{n:<14} {i:<w$}  {size_col:>9}  {local_col}");
+                    }
+                    if local.is_none() {
+                        ctx.dim("daemon not running, so local presence is unknown");
                     }
                     Ok(())
                 }
@@ -1024,6 +1062,55 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
             project::login(ctx, proj, &vars, &[])
         }
     }
+}
+
+fn local_image_sizes(ctx: &Ctx) -> Option<HashMap<String, u64>> {
+    if !daemon::running_silent(ctx) {
+        return None;
+    }
+    let text = ctx
+        .container(["image", "ls", "--format", "json"])
+        .stdout()
+        .ok()?;
+    let raw: Vec<serde_json::Value> = serde_json::from_str(&text).ok()?;
+    let mut map = HashMap::new();
+    for e in &raw {
+        let Some(full) = e
+            .get("configuration")
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str())
+        else {
+            continue;
+        };
+        let variants = e.get("variants").and_then(|v| v.as_array());
+        let size = variants
+            .and_then(|vs| {
+                vs.iter()
+                    .find(|v| {
+                        v.get("platform")
+                            .and_then(|p| p.get("architecture"))
+                            .and_then(|a| a.as_str())
+                            == Some(global::host_arch())
+                    })
+                    .or_else(|| vs.first())
+            })
+            .and_then(|v| v.get("size"))
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
+        let (repo, tag) = global::short_ref(full);
+        map.insert(full.to_string(), size);
+        map.insert(format!("{repo}:{tag}"), size);
+        map.entry(repo).or_insert(size);
+    }
+    Some(map)
+}
+
+fn lookup_image(map: &HashMap<String, u64>, image: &str) -> Option<u64> {
+    if let Some(s) = map.get(image) {
+        return Some(*s);
+    }
+    let (repo, _) = global::short_ref(image);
+    map.get(&repo).copied()
 }
 
 fn tty_flags() -> Vec<String> {
