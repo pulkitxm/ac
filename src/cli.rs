@@ -650,6 +650,23 @@ pub enum Action {
     ///   ac shop build --platform linux/amd64 --no-cache --sequential
     Build(BuildArgs),
 
+    /// Roll out the images a profile already pushed, without rebuilding.
+    ///
+    /// Runs the profile's `rollout.preflight` hooks and then its `rollout.run`
+    /// hooks, from the resolved build root. Each hook is argv with `{{...}}`
+    /// interpolation, and receives the resolved image references in the
+    /// environment (AC_IMAGE_<BUILD>, AC_IMAGES, AC_PROFILE, AC_TAG, ...), so
+    /// the rollout logic itself lives in your repo rather than in ac.
+    ///
+    /// Use it to re-run a rollout that failed after a successful push, or to
+    /// deploy an image someone else built.
+    ///
+    /// Examples:
+    ///   ac shop rollout --profile prod
+    ///   ac shop rollout web --profile pre-prod
+    ///   ac shop rollout --profile prod --dry-run --json
+    Rollout(RolloutArgs),
+
     /// Authenticate to the project's private registries.
     ///
     /// Runs each registry's passwordCmd and pipes it to
@@ -744,6 +761,18 @@ pub struct BuildArgs {
     #[arg(long)]
     pub sequential: bool,
 
+    /// Run the profile's rollout after every build and push succeeds.
+    ///
+    /// The rollout's own preflight hooks run FIRST, before anything is built,
+    /// so an unreachable cluster fails in seconds rather than after a long
+    /// build. Requires a profile that declares `rollout` and pushes.
+    #[arg(long, overrides_with = "no_rollout")]
+    pub rollout: bool,
+
+    /// Never roll out, even if the profile sets `rollout.auto`.
+    #[arg(long, overrides_with = "rollout")]
+    pub no_rollout: bool,
+
     /// Resolve and print what would be built, without building or pushing.
     ///
     /// Touches nothing: no daemon, no builder, no registry login. Pair with
@@ -755,6 +784,24 @@ pub struct BuildArgs {
     pub names: Vec<String>,
 }
 
+#[derive(Args, Debug)]
+pub struct RolloutArgs {
+    /// Profile whose rollout to run. Defaults to $AC_PROFILE, then `local`.
+    #[arg(short = 'P', long)]
+    pub profile: Option<String>,
+
+    /// Roll out from this tree. Overrides every other root rule.
+    #[arg(long)]
+    pub root: Option<PathBuf>,
+
+    /// Resolve and print the hooks and their environment, running nothing.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Builds whose images this rollout covers. Empty means every build.
+    pub names: Vec<String>,
+}
+
 impl BuildArgs {
     /// `--push` and `--no-push` collapse into a tri-state: `None` means the
     /// profile decides.
@@ -762,6 +809,18 @@ impl BuildArgs {
         if self.push {
             Some(true)
         } else if self.no_push {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
+    /// `--rollout` and `--no-rollout` collapse into a tri-state: `None` means
+    /// the profile's `rollout.auto` decides.
+    pub fn rollout_override(&self) -> Option<bool> {
+        if self.rollout {
+            Some(true)
+        } else if self.no_rollout {
             Some(false)
         } else {
             None

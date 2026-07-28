@@ -97,6 +97,21 @@ pub struct Profile {
     pub region: Option<String>,
     #[serde(default)]
     pub registry: Option<String>,
+    #[serde(default)]
+    pub rollout: Option<Rollout>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Rollout {
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub preflight: Vec<Vec<String>>,
+    #[serde(default)]
+    pub run: Vec<Vec<String>>,
+    #[serde(default)]
+    pub auto: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

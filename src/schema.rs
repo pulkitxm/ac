@@ -65,6 +65,44 @@ pub fn manifest_schema() -> Value {
                   "Value of {{registry}}: a host plus trailing slash, or empty for purely \
                    local profiles. May itself contain {{account}} and {{region}}.",
                 "examples": ["", "{{account}}.dkr.ecr.{{region}}.amazonaws.com/"]
+              },
+              "rollout": {
+                "type": "object",
+                "additionalProperties": false,
+                "description":
+                  "How this profile ships what it pushed. ac runs the hooks and supplies the \
+                   resolved image references; the deployment logic itself lives in your repo, \
+                   so each profile can have its own blast radius. Run with \
+                   `ac <project> build --rollout` or `ac <project> rollout`.",
+                "properties": {
+                  "description": {
+                    "type": "string",
+                    "description": "Shown by `ac <project> rollout --dry-run`."
+                  },
+                  "preflight": {
+                    "type": "array",
+                    "description":
+                      "argv arrays run BEFORE anything is built, so a bad cluster or bad \
+                       credentials fail in seconds instead of after a long build. A failure \
+                       aborts before the daemon or builder is touched.",
+                    "items": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "examples": [[["./extras/ac-scripts/preflight.sh"]]]
+                  },
+                  "run": {
+                    "type": "array",
+                    "description":
+                      "argv arrays run after every build and push in the run has succeeded.",
+                    "items": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+                    "examples": [[["./extras/ac-scripts/rollout.sh", "{{profile}}"]]]
+                  },
+                  "auto": {
+                    "type": "boolean",
+                    "default": false,
+                    "description":
+                      "Roll out on every `ac <project> build` for this profile, without \
+                       --rollout. `--no-rollout` still overrides it."
+                  }
+                }
               }
             }
           }

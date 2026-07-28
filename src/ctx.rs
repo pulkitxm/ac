@@ -202,6 +202,7 @@ pub struct Runner<'a> {
     prog: String,
     args: Vec<String>,
     cwd: Option<PathBuf>,
+    envs: Vec<(String, String)>,
     silent: bool,
 }
 
@@ -212,12 +213,24 @@ impl<'a> Runner<'a> {
             prog: prog.to_string(),
             args,
             cwd: None,
+            envs: Vec::new(),
             silent: false,
         }
     }
 
     pub fn cwd(mut self, dir: impl AsRef<Path>) -> Self {
         self.cwd = Some(dir.as_ref().to_path_buf());
+        self
+    }
+
+    pub fn envs<I, K, V>(mut self, vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.envs
+            .extend(vars.into_iter().map(|(k, v)| (k.into(), v.into())));
         self
     }
 
@@ -247,6 +260,9 @@ impl<'a> Runner<'a> {
         c.args(&self.args);
         if let Some(d) = &self.cwd {
             c.current_dir(d);
+        }
+        for (k, v) in &self.envs {
+            c.env(k, v);
         }
         c
     }

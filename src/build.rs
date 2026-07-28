@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -27,6 +28,7 @@ pub struct BuildOverrides {
     pub builder_memory: Option<String>,
     pub sequential: bool,
     pub dry_run: bool,
+    pub rollout: Option<bool>,
 }
 
 impl BuildOverrides {
@@ -120,6 +122,7 @@ pub struct Vars {
     pub git_branch: String,
     pub git_dirty_suffix: String,
     pub timestamp: String,
+    pub images: BTreeMap<String, Vec<String>>,
 }
 
 pub fn vars_for(proj: &Project, profile: &str, root: &Path) -> Vars {
@@ -164,7 +167,78 @@ pub fn vars_for(proj: &Project, profile: &str, root: &Path) -> Vars {
             }
         }
     }
+    v.images = resolve_images(proj, &v);
     v
+}
+
+fn resolve_images(proj: &Project, v: &Vars) -> BTreeMap<String, Vec<String>> {
+    let mut map = BTreeMap::new();
+    for b in &proj.manifest.builds {
+        let image = interpolate(&b.image, v);
+        let tags: Vec<String> = b
+            .tags
+            .iter()
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("{image}:{}", interpolate(t, v)))
+            .collect();
+        if !tags.is_empty() {
+            map.insert(b.name.clone(), tags);
+        }
+    }
+    map
+}
+
+pub fn env_key(prefix: &str, name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{prefix}{cleaned}")
+}
+
+pub fn hook_env(proj: &Project, v: &Vars, root: &Path, builds: &[String]) -> Vec<(String, String)> {
+    let mut env = vec![
+        ("AC_PROJECT".to_string(), proj.name.clone()),
+        ("AC_PROFILE".to_string(), v.profile.clone()),
+        ("AC_ACCOUNT".to_string(), v.account.clone()),
+        ("AC_REGION".to_string(), v.region.clone()),
+        ("AC_REGISTRY".to_string(), v.registry.clone()),
+        ("AC_TAG".to_string(), v.tag.clone()),
+        ("AC_VERSION".to_string(), v.version.clone()),
+        ("AC_ROOT".to_string(), root.display().to_string()),
+        ("AC_GIT_SHA".to_string(), v.git_sha.clone()),
+        ("AC_GIT_SHORT_SHA".to_string(), v.git_short_sha.clone()),
+        ("AC_GIT_BRANCH".to_string(), v.git_branch.clone()),
+        (
+            "AC_GIT_DIRTY".to_string(),
+            if v.git_dirty_suffix.is_empty() {
+                "0".to_string()
+            } else {
+                "1".to_string()
+            },
+        ),
+        ("AC_TIMESTAMP".to_string(), v.timestamp.clone()),
+        ("AC_BUILDS".to_string(), builds.join(" ")),
+    ];
+
+    let mut all: Vec<String> = Vec::new();
+    for (name, tags) in &v.images {
+        if let Some(first) = tags.first() {
+            env.push((env_key("AC_IMAGE_", name), first.clone()));
+        }
+        env.push((env_key("AC_IMAGES_", name), tags.join(" ")));
+        if builds.iter().any(|b| b == name) {
+            all.extend(tags.iter().cloned());
+        }
+    }
+    env.push(("AC_IMAGES".to_string(), all.join(" ")));
+    env
 }
 
 fn git_dir_ok(root: &Path) -> bool {
@@ -192,6 +266,12 @@ fn git(root: &Path, args: &[&str]) -> String {
 pub fn interpolate(s: &str, v: &Vars) -> String {
     if !s.contains("{{") {
         return s.to_string();
+    }
+    let mut s = s.to_string();
+    for (name, tags) in &v.images {
+        if let Some(first) = tags.first() {
+            s = s.replace(&format!("{{{{image.{name}}}}}"), first);
+        }
     }
     s.replace("{{profile}}", &v.profile)
         .replace("{{account}}", &v.account)
@@ -492,6 +572,7 @@ fn run_hooks(
     key: &str,
     hooks: &[Vec<String>],
     v: &Vars,
+    env: &[(String, String)],
 ) -> Result<()> {
     for hook in hooks {
         if hook.is_empty() {
@@ -500,7 +581,11 @@ fn run_hooks(
         let argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
         rep.dim(&format!("{key}: {}", argv.join(" ")));
         rep.phase(&format!("{key}: {}", argv[0]));
-        let runner = rep.ctx.exec(&argv[0], &argv[1..]).cwd(root);
+        let runner = rep
+            .ctx
+            .exec(&argv[0], &argv[1..])
+            .cwd(root)
+            .envs(env.to_vec());
         let ok = rep
             .run(runner)
             .map_err(|e| anyhow!("[{}] {key} could not run: {e}", rep.name))?;
@@ -680,8 +765,9 @@ fn build_one(
 ) -> Result<(Vec<String>, bool)> {
     let plan = plan_build(proj, b, ov, v, progress)?;
 
+    let env = hook_env(proj, v, root, std::slice::from_ref(&b.name));
     rep.phase("preflight");
-    run_hooks(rep, root, "preflight", &b.preflight, v)?;
+    run_hooks(rep, root, "preflight", &b.preflight, v, &env)?;
 
     rep.info(&format!("building {} -> {}", plan.platform, plan.tags[0]));
     rep.phase("resolving");
@@ -705,11 +791,183 @@ fn build_one(
         }
         rep.ok("pushed");
         rep.phase("postPush");
-        run_hooks(rep, root, "postPush", &b.post_push, v)?;
+        run_hooks(rep, root, "postPush", &b.post_push, v, &env)?;
     } else {
         rep.dim(&format!("push disabled for profile '{}'", v.profile));
     }
     Ok((plan.tags, plan.push))
+}
+
+fn profile_rollout<'a>(proj: &'a Project, profile: &str) -> Option<&'a crate::manifest::Rollout> {
+    proj.manifest
+        .profiles
+        .get(profile)
+        .and_then(|p| p.rollout.as_ref())
+}
+
+fn rollout_profiles(proj: &Project) -> Vec<&str> {
+    proj.manifest
+        .profiles
+        .0
+        .iter()
+        .filter(|(_, p)| p.rollout.is_some())
+        .map(|(n, _)| n.as_str())
+        .collect()
+}
+
+fn require_rollout<'a>(proj: &'a Project, profile: &str) -> Result<&'a crate::manifest::Rollout> {
+    profile_rollout(proj, profile).ok_or_else(|| {
+        let have = rollout_profiles(proj);
+        if have.is_empty() {
+            anyhow!(
+                "profile '{profile}' declares no rollout, and neither does any other \
+profile in project '{}'. Add \"rollout\": {{ \"run\": [[...]] }} to a profile.",
+                proj.name
+            )
+        } else {
+            anyhow!(
+                "profile '{profile}' declares no rollout (profiles that do: {})",
+                have.join(", ")
+            )
+        }
+    })
+}
+
+fn wants_rollout(proj: &Project, profile: &str, ov: &BuildOverrides) -> Result<bool> {
+    match ov.rollout {
+        Some(false) => Ok(false),
+        Some(true) => {
+            require_rollout(proj, profile)?;
+            Ok(true)
+        }
+        None => Ok(profile_rollout(proj, profile).is_some_and(|r| r.auto)),
+    }
+}
+
+fn run_rollout_hooks(
+    ctx: &Ctx,
+    proj: &Project,
+    root: &Path,
+    key: &str,
+    hooks: &[Vec<String>],
+    v: &Vars,
+    builds: &[String],
+) -> Result<()> {
+    if hooks.is_empty() {
+        return Ok(());
+    }
+    let rep = Reporter::new(ctx, "rollout", Mode::Inherit, None, None);
+    let env = hook_env(proj, v, root, builds);
+    run_hooks(&rep, root, key, hooks, v, &env)
+}
+
+pub fn project_rollout(
+    ctx: &Ctx,
+    proj: &Project,
+    names: &[String],
+    ov: &BuildOverrides,
+) -> Result<()> {
+    let profile = ov.profile_name();
+    if proj.manifest.profiles.get(&profile).is_none() {
+        return Err(anyhow!(
+            "unknown profile '{profile}' (have: {})",
+            proj.manifest.profiles.keys().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    let rollout = require_rollout(proj, &profile)?.clone();
+
+    let all = proj.manifest.build_names();
+    let builds: Vec<String> = if names.is_empty() {
+        all.clone()
+    } else {
+        for n in names {
+            if !all.contains(n) {
+                return Err(anyhow!("no such build '{n}' (have: {})", all.join(" ")));
+            }
+        }
+        names.to_vec()
+    };
+
+    let root = resolve_root(ctx, proj, ov)?;
+    let vars = vars_for(proj, &profile, &root);
+
+    if ov.dry_run {
+        return emit_rollout_plan(ctx, &profile, &rollout, &vars, &root, proj, &builds);
+    }
+
+    ctx.info(&format!("rollout profile: {profile}"));
+    ctx.info(&format!("build root: {}", root.display()));
+    run_rollout_hooks(
+        ctx,
+        proj,
+        &root,
+        "rollout.preflight",
+        &rollout.preflight,
+        &vars,
+        &builds,
+    )?;
+    run_rollout_hooks(ctx, proj, &root, "rollout", &rollout.run, &vars, &builds)?;
+    ctx.ok("rollout finished");
+    Ok(())
+}
+
+fn emit_rollout_plan(
+    ctx: &Ctx,
+    profile: &str,
+    rollout: &crate::manifest::Rollout,
+    vars: &Vars,
+    root: &Path,
+    proj: &Project,
+    builds: &[String],
+) -> Result<()> {
+    let render = |hooks: &[Vec<String>]| -> Vec<Vec<String>> {
+        hooks
+            .iter()
+            .filter(|h| !h.is_empty())
+            .map(|h| h.iter().map(|a| interpolate(a, vars)).collect())
+            .collect()
+    };
+    let pre = render(&rollout.preflight);
+    let run = render(&rollout.run);
+    let env = hook_env(proj, vars, root, builds);
+
+    if ctx.json {
+        let env_map: serde_json::Map<String, serde_json::Value> = env
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect();
+        return ctx.emit_json(&serde_json::json!({
+            "profile": profile,
+            "root": root.display().to_string(),
+            "builds": builds,
+            "preflight": pre,
+            "run": run,
+            "env": env_map,
+        }));
+    }
+
+    println!("{}", style::bold(profile));
+    if let Some(d) = &rollout.description {
+        println!("  {d}");
+    }
+    println!("  root        {}", root.display());
+    println!("  builds      {}", builds.join(" "));
+    for (label, hooks) in [("preflight", &pre), ("rollout", &run)] {
+        for h in hooks {
+            println!(
+                "  {}",
+                style::dim(&format!(
+                    "$ {label}: {}",
+                    h.iter()
+                        .map(|a| crate::ctx::shell_quote(a))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ))
+            );
+        }
+    }
+    ctx.dim("dry run, nothing was rolled out");
+    Ok(())
 }
 
 pub fn project_build(
@@ -743,6 +1001,14 @@ pub fn project_build(
 
     let root = resolve_root(ctx, proj, ov)?;
     let vars_preview = vars_for(proj, &profile, &root);
+    let do_rollout = wants_rollout(proj, &profile, ov)?;
+    let pushes = ov.push.unwrap_or_else(|| profile_push(proj, &profile));
+    if do_rollout && !pushes {
+        return Err(anyhow!(
+            "--rollout needs a profile that pushes, but '{profile}' resolves to push=false, \
+so nothing would reach the registry for the rollout to pick up"
+        ));
+    }
 
     if ov.dry_run {
         let plans: Vec<serde_json::Value> = targets
@@ -792,11 +1058,29 @@ pub fn project_build(
             }
             println!();
         }
+        if do_rollout {
+            if let Some(r) = profile_rollout(proj, &profile) {
+                emit_rollout_plan(ctx, &profile, r, &vars_preview, &root, proj, &targets)?;
+            }
+        }
         ctx.dim("dry run, nothing was built or pushed");
         return Ok(());
     }
 
     ctx.info(&format!("build root: {}", root.display()));
+
+    if do_rollout {
+        let r = require_rollout(proj, &profile)?.clone();
+        run_rollout_hooks(
+            ctx,
+            proj,
+            &root,
+            "rollout.preflight",
+            &r.preflight,
+            &vars_preview,
+            &targets,
+        )?;
+    }
 
     daemon::ensure(ctx)?;
     ensure_builder(
@@ -840,7 +1124,15 @@ pub fn project_build(
         run_basic(ctx, proj, &root, &entries, ov, &vars, progress, mode)
     };
 
-    report(ctx, &outcomes)
+    report(ctx, &outcomes)?;
+
+    if do_rollout {
+        let r = require_rollout(proj, &profile)?.clone();
+        ctx.info(&format!("rolling out profile '{profile}'"));
+        run_rollout_hooks(ctx, proj, &root, "rollout", &r.run, &vars, &targets)?;
+        ctx.ok("rollout finished");
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
