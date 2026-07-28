@@ -1,8 +1,11 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{anyhow, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -71,6 +74,7 @@ pub struct Ctx {
     pub json: bool,
     pub quiet: bool,
     pub color: bool,
+    echoed: Mutex<HashSet<String>>,
     pub config_dir: PathBuf,
     pub config_file: PathBuf,
     pub owner_file: PathBuf,
@@ -99,11 +103,13 @@ impl Ctx {
         let color =
             !no_color && !json && env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
         owo_colors::set_override(color);
+        set_quiet(quiet);
 
         let ctx = Ctx {
             json,
             quiet,
             color,
+            echoed: Mutex::new(HashSet::new()),
             config_file: config_dir.join("config.json"),
             owner_file: state_dir.join("daemon.owned"),
             supervisor_pidfile: state_dir.join("supervisor.pid"),
@@ -154,7 +160,7 @@ impl Ctx {
         self.out(&format!("{} {msg}", style::blue("==>")));
     }
     pub fn ok(&self, msg: &str) {
-        self.out(&format!("{} {msg}", style::green("  ok")));
+        self.out(&format!("{} {msg}", style::green("ok")));
     }
     pub fn dim(&self, msg: &str) {
         self.out(&style::dim(msg));
@@ -163,7 +169,7 @@ impl Ctx {
         eprintln!("{} {msg}", style::yellow("warn"));
     }
     pub fn err(&self, msg: &str) {
-        eprintln!("{} {msg}", style::red(" err"));
+        eprintln!("{} {msg}", style::red("err"));
     }
 
     pub fn emit_json(&self, v: &serde_json::Value) -> Result<()> {
@@ -204,6 +210,7 @@ pub struct Runner<'a> {
     cwd: Option<PathBuf>,
     envs: Vec<(String, String)>,
     silent: bool,
+    once: bool,
 }
 
 impl<'a> Runner<'a> {
@@ -215,6 +222,7 @@ impl<'a> Runner<'a> {
             cwd: None,
             envs: Vec::new(),
             silent: false,
+            once: false,
         }
     }
 
@@ -239,6 +247,11 @@ impl<'a> Runner<'a> {
         self
     }
 
+    pub fn echo_once(mut self) -> Self {
+        self.once = true;
+        self
+    }
+
     pub fn display(&self) -> String {
         let mut s = self.prog.clone();
         for a in &self.args {
@@ -252,7 +265,16 @@ impl<'a> Runner<'a> {
         if self.silent || self.ctx.quiet {
             return;
         }
-        eprintln!("{}", style::dim_err(&format!("   $ {}", self.display())));
+        let line = self.display();
+        if self.once {
+            let Ok(mut seen) = self.ctx.echoed.lock() else {
+                return;
+            };
+            if !seen.insert(line.clone()) {
+                return;
+            }
+        }
+        eprintln!("{}", style::dim_err(&format!("$ {line}")));
     }
 
     fn build(&self) -> Command {
@@ -389,6 +411,28 @@ impl<'a> Runner<'a> {
     }
 }
 
+static QUIET: AtomicBool = AtomicBool::new(false);
+
+pub fn set_quiet(quiet: bool) {
+    QUIET.store(quiet, Ordering::Relaxed);
+}
+
+pub fn is_quiet() -> bool {
+    QUIET.load(Ordering::Relaxed)
+}
+
+pub fn echo_external<S: AsRef<str>>(prog: &str, args: &[S]) {
+    if QUIET.load(Ordering::Relaxed) {
+        return;
+    }
+    let mut line = prog.to_string();
+    for a in args {
+        line.push(' ');
+        line.push_str(&shell_quote(a.as_ref()));
+    }
+    eprintln!("{}", style::dim_err(&format!("$ {line}")));
+}
+
 pub fn home_dir() -> Result<PathBuf> {
     env::var_os("HOME")
         .map(PathBuf::from)
@@ -423,6 +467,7 @@ fn ac_home() -> PathBuf {
 }
 
 fn probe_running_app_root() -> Option<String> {
+    echo_external("container", &["system", "status"]);
     let out = Command::new("container")
         .args(["system", "status"])
         .stderr(Stdio::null())
@@ -447,6 +492,7 @@ pub fn parse_app_root(text: &str) -> Option<String> {
 }
 
 pub fn now_stamp() -> String {
+    echo_external("date", &["+%Y%m%d%H%M%S"]);
     Command::new("date")
         .arg("+%Y%m%d%H%M%S")
         .output()

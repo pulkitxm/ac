@@ -92,6 +92,7 @@ pub fn resolve_root(ctx: &Ctx, proj: &Project, ov: &BuildOverrides) -> Result<Pa
 }
 
 fn git_toplevel(dir: &Path) -> Option<PathBuf> {
+    crate::ctx::echo_external("git", &["rev-parse", "--show-toplevel"]);
     let out = std::process::Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .current_dir(dir)
@@ -188,6 +189,26 @@ fn resolve_images(proj: &Project, v: &Vars) -> BTreeMap<String, Vec<String>> {
     map
 }
 
+pub fn absolute_against(path: &str, root: &Path) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        return path.to_string();
+    }
+    let joined = root.join(p);
+    match std::fs::canonicalize(&joined) {
+        Ok(c) => c.display().to_string(),
+        Err(_) => joined.display().to_string(),
+    }
+}
+
+fn absolute_prog(prog: &str, root: &Path) -> String {
+    if prog.contains('/') {
+        absolute_against(prog, root)
+    } else {
+        prog.to_string()
+    }
+}
+
 pub fn env_key(prefix: &str, name: &str) -> String {
     let cleaned: String = name
         .chars()
@@ -225,6 +246,10 @@ pub fn hook_env(proj: &Project, v: &Vars, root: &Path, builds: &[String]) -> Vec
         ),
         ("AC_TIMESTAMP".to_string(), v.timestamp.clone()),
         ("AC_BUILDS".to_string(), builds.join(" ")),
+        (
+            "AC_QUIET".to_string(),
+            if crate::ctx::is_quiet() { "1" } else { "0" }.to_string(),
+        ),
     ];
 
     let mut all: Vec<String> = Vec::new();
@@ -242,6 +267,10 @@ pub fn hook_env(proj: &Project, v: &Vars, root: &Path, builds: &[String]) -> Vec
 }
 
 fn git_dir_ok(root: &Path) -> bool {
+    crate::ctx::echo_external(
+        "git",
+        &["-C", &root.to_string_lossy(), "rev-parse", "--git-dir"],
+    );
     std::process::Command::new("git")
         .args(["-C", &root.to_string_lossy(), "rev-parse", "--git-dir"])
         .stdout(std::process::Stdio::null())
@@ -254,6 +283,7 @@ fn git_dir_ok(root: &Path) -> bool {
 fn git(root: &Path, args: &[&str]) -> String {
     let mut a = vec!["-C".to_string(), root.to_string_lossy().to_string()];
     a.extend(args.iter().map(|s| s.to_string()));
+    crate::ctx::echo_external("git", &a);
     std::process::Command::new("git")
         .args(&a)
         .stderr(std::process::Stdio::null())
@@ -326,7 +356,6 @@ pub fn ensure_builder(ctx: &Ctx, want_cpus: Option<u32>, want_mem: Option<&str>)
 
     let Ok(text) = ctx
         .container(["builder", "status", "--format", "json"])
-        .silent()
         .stdout()
     else {
         return;
@@ -394,6 +423,7 @@ fn output_mode(ctx: &Ctx, ov: &BuildOverrides, count: usize) -> Mode {
 struct Reporter<'a> {
     ctx: &'a Ctx,
     name: String,
+    width: usize,
     mode: Mode,
     multi: Option<&'a MultiProgress>,
     bar: Option<ProgressBar>,
@@ -411,11 +441,17 @@ impl<'a> Reporter<'a> {
         Reporter {
             ctx,
             name: name.to_string(),
+            width: name.len(),
             mode,
             multi,
             bar,
             tracker: Arc::new(Mutex::new(Tracker::new())),
         }
+    }
+
+    fn padded_to(mut self, width: usize) -> Self {
+        self.width = width;
+        self
     }
 
     fn println(&self, line: String) {
@@ -427,16 +463,31 @@ impl<'a> Reporter<'a> {
         }
     }
 
+    fn echo(&self, runner: &Runner<'_>) {
+        if self.ctx.quiet {
+            return;
+        }
+        self.println(style::dim_err(&format!("$ {}", runner.display())));
+    }
+
+    fn label(&self) -> String {
+        if self.name.is_empty() {
+            String::new()
+        } else {
+            format!("{:<w$} ", format!("[{}]", self.name), w = self.width + 2)
+        }
+    }
+
     fn info(&self, msg: &str) {
-        self.println(format!("{} [{}] {msg}", style::blue("==>"), self.name));
+        self.println(format!("{} {}{msg}", style::blue("==>"), self.label()));
     }
 
     fn ok(&self, msg: &str) {
-        self.println(format!("{} [{}] {msg}", style::green("  ok"), self.name));
+        self.println(format!("{} {}{msg}", style::green("ok"), self.label()));
     }
 
     fn dim(&self, msg: &str) {
-        self.println(style::dim(&format!("  [{}] {msg}", self.name)));
+        self.println(style::dim(&format!("{}{msg}", self.label())));
     }
 
     fn phase(&self, phase: &str) {
@@ -449,19 +500,19 @@ impl<'a> Reporter<'a> {
         let pos = fin.position();
         let line = if let Some(err) = &fin.error {
             format!(
-                "{} [{}] {pos}{}  {}",
-                style::red("   x"),
-                self.name,
+                "{} {}{pos}{}  {}",
+                style::red("x"),
+                self.label(),
                 fin.label,
                 err
             )
         } else if fin.cached {
-            style::dim(&format!("   - [{}] {pos}{}  cached", self.name, fin.label))
+            style::dim(&format!("- {}{pos}{}  cached", self.label(), fin.label))
         } else {
             format!(
-                "{} [{}] {pos}{}  {}",
-                style::green("   +"),
-                self.name,
+                "{} {}{pos}{}  {}",
+                style::green("+"),
+                self.label(),
                 fin.label,
                 fin.secs.map(fmt_secs).unwrap_or_default()
             )
@@ -482,7 +533,7 @@ impl<'a> Reporter<'a> {
             Mode::Stream | Mode::Inherit => {
                 self.println(format!(
                     "{} {line}",
-                    style::dim(&format!("{:>12} |", self.name))
+                    style::dim(&format!("{:<w$} |", self.name, w = self.width))
                 ));
             }
         }
@@ -498,16 +549,23 @@ impl<'a> Reporter<'a> {
             return;
         }
         self.println(style::dim(&format!(
-            "  [{}] last {} output lines:",
-            self.name,
+            "{}last {} output lines:",
+            self.label(),
             tail.len() - start
         )));
         for l in &tail[start..] {
-            self.println(style::dim(&format!("  [{}] {l}", self.name)));
+            self.println(style::dim(&format!("{}{l}", self.label())));
         }
     }
 
     fn run(&self, runner: Runner<'_>) -> Result<bool> {
+        let runner = if self.multi.is_some() {
+            self.echo(&runner);
+            runner.silent()
+        } else {
+            runner
+        };
+
         if self.mode == Mode::Inherit {
             return Ok(runner.status()?.success());
         }
@@ -541,6 +599,10 @@ impl<'a> Reporter<'a> {
         }
         Ok(child.wait()?.success())
     }
+}
+
+fn name_width(entries: &[Build]) -> usize {
+    entries.iter().map(|b| b.name.len()).max().unwrap_or(0)
 }
 
 fn spawn_ticker(reporters: &[&Reporter<'_>]) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
@@ -578,8 +640,9 @@ fn run_hooks(
         if hook.is_empty() {
             continue;
         }
-        let argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
-        rep.dim(&format!("{key}: {}", argv.join(" ")));
+        let mut argv: Vec<String> = hook.iter().map(|a| interpolate(a, v)).collect();
+        argv[0] = absolute_prog(&argv[0], root);
+        rep.info(key);
         rep.phase(&format!("{key}: {}", argv[0]));
         let runner = rep
             .ctx
@@ -588,9 +651,9 @@ fn run_hooks(
             .envs(env.to_vec());
         let ok = rep
             .run(runner)
-            .map_err(|e| anyhow!("[{}] {key} could not run: {e}", rep.name))?;
+            .map_err(|e| anyhow!("{}{key} could not run: {e}", rep.label()))?;
         if !ok {
-            return Err(anyhow!("[{}] {key} failed: {}", rep.name, argv.join(" ")));
+            return Err(anyhow!("{}{key} failed: {}", rep.label(), argv.join(" ")));
         }
     }
     Ok(())
@@ -609,6 +672,7 @@ fn plan_build(
     ov: &BuildOverrides,
     v: &Vars,
     progress: Option<&str>,
+    root: &Path,
 ) -> Result<Plan> {
     let platform = ov
         .platform
@@ -651,7 +715,7 @@ git placeholders are empty because the build root is not a git repository",
         "--platform".into(),
         platform.clone(),
         "-f".into(),
-        b.dockerfile.clone(),
+        absolute_against(&b.dockerfile, root),
     ];
     if let Some(p) = progress {
         args.push("--progress".into());
@@ -697,7 +761,7 @@ git placeholders are empty because the build root is not a git repository",
         args.push("-t".into());
         args.push(t.clone());
     }
-    args.push(b.context.clone());
+    args.push(absolute_against(&b.context, root));
 
     Ok(Plan {
         args,
@@ -763,7 +827,7 @@ fn build_one(
     v: &Vars,
     progress: Option<&str>,
 ) -> Result<(Vec<String>, bool)> {
-    let plan = plan_build(proj, b, ov, v, progress)?;
+    let plan = plan_build(proj, b, ov, v, progress, root)?;
 
     let env = hook_env(proj, v, root, std::slice::from_ref(&b.name));
     rep.phase("preflight");
@@ -856,7 +920,7 @@ fn run_rollout_hooks(
     if hooks.is_empty() {
         return Ok(());
     }
-    let rep = Reporter::new(ctx, "rollout", Mode::Inherit, None, None);
+    let rep = Reporter::new(ctx, "", Mode::Inherit, None, None);
     let env = hook_env(proj, v, root, builds);
     run_hooks(&rep, root, key, hooks, v, &env)
 }
@@ -924,7 +988,11 @@ fn emit_rollout_plan(
         hooks
             .iter()
             .filter(|h| !h.is_empty())
-            .map(|h| h.iter().map(|a| interpolate(a, vars)).collect())
+            .map(|h| {
+                let mut argv: Vec<String> = h.iter().map(|a| interpolate(a, vars)).collect();
+                argv[0] = absolute_prog(&argv[0], root);
+                argv
+            })
             .collect()
     };
     let pre = render(&rollout.preflight);
@@ -1015,7 +1083,7 @@ so nothing would reach the registry for the rollout to pick up"
             .iter()
             .filter_map(|t| proj.manifest.build(t))
             .filter_map(|b| {
-                plan_build(proj, b, ov, &vars_preview, ov.progress.as_deref())
+                plan_build(proj, b, ov, &vars_preview, ov.progress.as_deref(), &root)
                     .ok()
                     .map(|plan| (b, plan))
             })
@@ -1049,7 +1117,7 @@ so nothing would reach the registry for the rollout to pick up"
             if let Some(a) = p["command"].as_array() {
                 let joined: Vec<String> = a
                     .iter()
-                    .map(|x| x.as_str().unwrap_or("").to_string())
+                    .map(|x| crate::ctx::shell_quote(x.as_str().unwrap_or("")))
                     .collect();
                 println!(
                     "  {}",
@@ -1147,8 +1215,11 @@ fn run_fancy(
     parallel: bool,
 ) -> Vec<Outcome> {
     let multi = MultiProgress::new();
-    let bar_style = ProgressStyle::with_template("{spinner:.cyan} {prefix:>12} {wide_msg}")
-        .unwrap_or_else(|_| ProgressStyle::default_spinner());
+    let width = name_width(entries);
+    let bar_style = ProgressStyle::with_template(&format!(
+        "{{spinner:.cyan}} {{prefix:<{width}}} {{wide_msg}}"
+    ))
+    .unwrap_or_else(|_| ProgressStyle::default_spinner());
 
     let reporters: Vec<Reporter<'_>> = entries
         .iter()
@@ -1158,7 +1229,7 @@ fn run_fancy(
             bar.set_prefix(b.name.clone());
             bar.set_message("starting");
             bar.enable_steady_tick(Duration::from_millis(120));
-            Reporter::new(ctx, &b.name, Mode::Fancy, Some(&multi), Some(bar))
+            Reporter::new(ctx, &b.name, Mode::Fancy, Some(&multi), Some(bar)).padded_to(width)
         })
         .collect();
 
@@ -1256,6 +1327,7 @@ fn run_basic(
     progress: Option<&str>,
     mode: Mode,
 ) -> Vec<Outcome> {
+    let width = name_width(entries);
     let run_one = |rep: &Reporter<'_>, b: &Build| -> Outcome {
         let res = build_one(rep, proj, root, b, ov, vars, progress);
         let (steps_done, steps_cached, secs) = rep
@@ -1297,7 +1369,7 @@ fn run_basic(
                 .iter()
                 .map(|b| {
                     scope.spawn(move || {
-                        let rep = Reporter::new(ctx, &b.name, mode, None, None);
+                        let rep = Reporter::new(ctx, &b.name, mode, None, None).padded_to(width);
                         run_one(&rep, b)
                     })
                 })
@@ -1308,7 +1380,7 @@ fn run_basic(
         entries
             .iter()
             .map(|b| {
-                let rep = Reporter::new(ctx, &b.name, mode, None, None);
+                let rep = Reporter::new(ctx, &b.name, mode, None, None).padded_to(width);
                 run_one(&rep, b)
             })
             .collect()

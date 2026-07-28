@@ -10,7 +10,7 @@ pub fn running(ctx: &Ctx) -> bool {
 }
 
 pub fn running_silent(ctx: &Ctx) -> bool {
-    ctx.container(["system", "status"]).silent().quiet_ok()
+    ctx.container(["system", "status"]).quiet_ok()
 }
 
 pub fn is_ours(ctx: &Ctx) -> bool {
@@ -18,7 +18,7 @@ pub fn is_ours(ctx: &Ctx) -> bool {
 }
 
 pub fn app_root(ctx: &Ctx) -> Option<String> {
-    let text = ctx.container(["system", "status"]).silent().stdout().ok()?;
+    let text = ctx.container(["system", "status"]).stdout().ok()?;
     parse_app_root(&text)
 }
 

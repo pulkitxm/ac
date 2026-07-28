@@ -4,7 +4,7 @@ use crate::cli::{ImageAction, NetworkAction, RegistryAction, SystemAction, Volum
 use crate::ctx::Ctx;
 use crate::{daemon, manifest, supervisor};
 
-fn host_arch() -> &'static str {
+pub fn host_arch() -> &'static str {
     match std::env::consts::ARCH {
         "aarch64" => "arm64",
         "x86_64" => "amd64",
@@ -12,7 +12,7 @@ fn host_arch() -> &'static str {
     }
 }
 
-fn short_ref(full: &str) -> (String, String) {
+pub fn short_ref(full: &str) -> (String, String) {
     let (repo, tag) = match full.rfind(':') {
         Some(i) if !full[i + 1..].contains('/') => (&full[..i], &full[i + 1..]),
         _ => (full, "latest"),
@@ -24,7 +24,7 @@ fn short_ref(full: &str) -> (String, String) {
     (repo.to_string(), tag.to_string())
 }
 
-fn fmt_size(bytes: u64) -> String {
+pub fn fmt_size(bytes: u64) -> String {
     let b = bytes as f64;
     if b >= 1e9 {
         format!("{:.2} GB", b / 1e9)
