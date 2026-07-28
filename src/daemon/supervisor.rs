@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 
-use crate::ctx::Ctx;
-use crate::{daemon, state};
+use crate::core::ctx::Ctx;
+use crate::core::state;
+use crate::daemon;
 
 fn poll_interval() -> u64 {
     env::var("AC_POLL_INTERVAL")
@@ -38,7 +39,7 @@ pub fn running(ctx: &Ctx) -> bool {
 }
 
 fn process_alive(pid: u32) -> bool {
-    crate::ctx::echo_external("/bin/kill", &["-0", &pid.to_string()]);
+    crate::core::ctx::echo_external("/bin/kill", &["-0", &pid.to_string()]);
     std::process::Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
         .stdout(Stdio::null())
@@ -81,7 +82,7 @@ pub fn ensure(ctx: &Ctx) -> Result<()> {
 
 pub fn stop(ctx: &Ctx) {
     if let Some(p) = pid(ctx) {
-        crate::ctx::echo_external("/bin/kill", &[p.to_string()]);
+        crate::core::ctx::echo_external("/bin/kill", &[p.to_string()]);
         std::process::Command::new("/bin/kill")
             .arg(p.to_string())
             .stdout(Stdio::null())

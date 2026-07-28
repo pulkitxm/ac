@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use crate::ctx::Ctx;
+use crate::core::ctx::Ctx;
 
 #[derive(Debug, Clone, Deserialize)]
 struct RawNetwork {

@@ -5,7 +5,7 @@ use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter, PathCompleter
 use clap_complete::CompletionCandidate;
 
 use crate::cli::{Cli, RESERVED};
-use crate::ctx::Ctx;
+use crate::core::ctx::Ctx;
 use crate::manifest;
 
 const SIGNALS: &[&str] = &[

@@ -1,66 +1,10 @@
 use anyhow::Result;
 
 use crate::cli::{ImageAction, NetworkAction, RegistryAction, SystemAction, VolumeAction};
-use crate::ctx::Ctx;
-use crate::{daemon, manifest, supervisor};
-
-pub fn host_arch() -> &'static str {
-    match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        "x86_64" => "amd64",
-        other => other,
-    }
-}
-
-pub fn short_ref(full: &str) -> (String, String) {
-    let (repo, tag) = match full.rfind(':') {
-        Some(i) if !full[i + 1..].contains('/') => (&full[..i], &full[i + 1..]),
-        _ => (full, "latest"),
-    };
-    let repo = repo
-        .strip_prefix("docker.io/library/")
-        .or_else(|| repo.strip_prefix("docker.io/"))
-        .unwrap_or(repo);
-    (repo.to_string(), tag.to_string())
-}
-
-pub fn fmt_size(bytes: u64) -> String {
-    let b = bytes as f64;
-    if b >= 1e9 {
-        format!("{:.2} GB", b / 1e9)
-    } else if b >= 1e6 {
-        format!("{:.1} MB", b / 1e6)
-    } else if b >= 1e3 {
-        format!("{:.1} kB", b / 1e3)
-    } else {
-        format!("{bytes} B")
-    }
-}
-
-fn fmt_date(iso: &str) -> String {
-    let mut out: String = iso.chars().take(19).collect();
-    if let Some(i) = out.find('T') {
-        out.replace_range(i..i + 1, " ");
-    }
-    out
-}
-
-fn print_pretty_json(ctx: &Ctx, args: Vec<String>) -> Result<()> {
-    let text = ctx.container(args).stdout()?;
-    match serde_json::from_str::<serde_json::Value>(&text) {
-        Ok(v) => println!("{}", serde_json::to_string_pretty(&v)?),
-        Err(_) => print!("{text}"),
-    }
-    Ok(())
-}
-
-fn exit_ok(status: std::process::ExitStatus) -> Result<()> {
-    if status.success() {
-        Ok(())
-    } else {
-        Err(anyhow::anyhow!("command exited {status}"))
-    }
-}
+use crate::core::ctx::Ctx;
+use crate::core::util::{exit_ok, fmt_date, fmt_size, host_arch, print_pretty_json, short_ref};
+use crate::daemon::{self, supervisor};
+use crate::manifest;
 
 fn passthrough_json(ctx: &Ctx, args: &[&str]) -> Result<()> {
     daemon::require(ctx)?;
@@ -196,7 +140,7 @@ pub fn ps(ctx: &Ctx, all: bool, ids: bool) -> Result<()> {
         return ctx.emit_json(&serde_json::Value::Array(items));
     }
 
-    ctx.log(&crate::style::bold(&format!(
+    ctx.log(&crate::core::style::bold(&format!(
         "{:<22} {:<10} {:<12} {:<10} {:<18} {}",
         "CONTAINER", "PROJECT", "SERVICE", "STATE", "IP", "IMAGE"
     )));
@@ -280,7 +224,7 @@ pub fn image(ctx: &Ctx, action: Option<&ImageAction>) -> Result<()> {
             rows.sort();
             let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
             let tag_w = rows.iter().map(|r| r.1.len()).max().unwrap_or(3).max(3);
-            ctx.log(&crate::style::bold(&format!(
+            ctx.log(&crate::core::style::bold(&format!(
                 "{:<name_w$}  {:<tag_w$}  {:<7} {:>9}  {}",
                 "NAME", "TAG", "ARCH", "SIZE", "CREATED"
             )));
@@ -407,7 +351,7 @@ pub fn volume(ctx: &Ctx, action: Option<&VolumeAction>) -> Result<()> {
                 .collect();
             rows.sort();
             let name_w = rows.iter().map(|r| r.0.len()).max().unwrap_or(4).max(4);
-            ctx.log(&crate::style::bold(&format!(
+            ctx.log(&crate::core::style::bold(&format!(
                 "{:<name_w$}  {:<7} {:<7} {}",
                 "NAME", "DRIVER", "FORMAT", "CREATED"
             )));
@@ -479,10 +423,13 @@ pub fn system(ctx: &Ctx, action: Option<&SystemAction>) -> Result<()> {
                     "supervisor": { "running": sup.is_some(), "pid": sup },
                 }));
             }
-            println!("{}  {}", crate::style::bold("daemon"), d.line());
+            println!("{}  {}", crate::core::style::bold("daemon"), d.line());
             match sup {
-                Some(p) => println!("{}  running (pid {p})", crate::style::bold("supervisor")),
-                None => println!("{}  not running", crate::style::bold("supervisor")),
+                Some(p) => println!(
+                    "{}  running (pid {p})",
+                    crate::core::style::bold("supervisor")
+                ),
+                None => println!("{}  not running", crate::core::style::bold("supervisor")),
             }
             Ok(())
         }

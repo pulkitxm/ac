@@ -9,11 +9,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 
 use crate::build::{interpolate, Vars};
-use crate::ctx::Ctx;
+use crate::core::ctx::Ctx;
+use crate::core::state::Snapshot;
+use crate::core::style;
+use crate::daemon::{self, supervisor};
 use crate::manifest::{json_scalar, Project, Service};
-use crate::state::Snapshot;
-use crate::style;
-use crate::{daemon, supervisor};
 
 pub fn existing_volumes(ctx: &Ctx) -> Vec<String> {
     ctx.container(["volume", "ls", "--format", "json"])
@@ -302,7 +302,12 @@ pub fn run_once(
         .manifest
         .service(&name)
         .ok_or_else(|| anyhow!("no such service '{name}'"))?;
-    let cname = format!("{}-{}-run-{}", proj.name, name, crate::ctx::now_stamp());
+    let cname = format!(
+        "{}-{}-run-{}",
+        proj.name,
+        name,
+        crate::core::ctx::now_stamp()
+    );
 
     daemon::ensure(ctx)?;
     let vars = Vars::default();
@@ -558,7 +563,7 @@ fn stop_args(cname: &str, time: Option<u32>) -> Vec<String> {
 
 fn kill_runtime_shim(cname: &str) -> bool {
     let pattern = format!("container-runtime-linux.*--uuid {cname}$");
-    crate::ctx::echo_external("pgrep", &["-f", &pattern]);
+    crate::core::ctx::echo_external("pgrep", &["-f", &pattern]);
     let out = std::process::Command::new("pgrep")
         .args(["-f", &pattern])
         .output();
@@ -574,7 +579,7 @@ fn kill_runtime_shim(cname: &str) -> bool {
         return false;
     }
     for pid in &pids {
-        crate::ctx::echo_external("/bin/kill", &["-9", pid]);
+        crate::core::ctx::echo_external("/bin/kill", &["-9", pid]);
         std::process::Command::new("/bin/kill")
             .args(["-9", pid])
             .status()

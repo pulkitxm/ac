@@ -1,9 +1,11 @@
+pub mod supervisor;
+
 use std::fs;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-use crate::ctx::{epoch_secs, parse_app_root, Ctx};
+use crate::core::ctx::{epoch_secs, parse_app_root, Ctx};
 
 pub fn running(ctx: &Ctx) -> bool {
     ctx.container(["system", "status"]).quiet_ok()
@@ -142,7 +144,7 @@ impl DaemonStatus {
         };
         format!(
             "running {}  appRoot={}",
-            crate::style::dim(owner),
+            crate::core::style::dim(owner),
             self.app_root.clone().unwrap_or_default()
         )
     }
