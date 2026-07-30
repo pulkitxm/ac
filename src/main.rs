@@ -271,6 +271,28 @@ mod tests {
     }
 
     #[test]
+    fn every_project_action_is_listed_in_project_actions() {
+        let cmd = Cli::command();
+        let project = cmd
+            .get_subcommands()
+            .find(|s| s.get_name() == "project")
+            .expect("project subcommand");
+        let missing: Vec<String> = project
+            .get_subcommands()
+            .flat_map(|s| {
+                std::iter::once(s.get_name().to_string())
+                    .chain(s.get_all_aliases().map(|a| a.to_string()))
+            })
+            .filter(|n| !cli::PROJECT_ACTIONS.contains(&n.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "a manifest script named after these would be silently shadowed, so manifest \
+validation must know them; add to PROJECT_ACTIONS: {missing:?}"
+        );
+    }
+
+    #[test]
     fn bare_invocations_collapse_to_help() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         assert_eq!(rewrite_argv(&a(&["ac", "--json"])).unwrap(), a(&["ac"]));

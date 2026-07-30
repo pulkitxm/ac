@@ -458,6 +458,24 @@ pub enum Action {
     /// Examples:
     ///   ac shop profiles
     Profiles,
+
+    /// List the custom scripts this project declares.
+    ///
+    /// A manifest may carry a `scripts` map of name to shell string. Running
+    /// `ac <project> <name> [args...]` hands that string to `sh -c`, with any
+    /// extra arguments appended shell-quoted (npm run style), so the script
+    /// decides what its arguments mean. The script sees AC_PROJECT,
+    /// AC_PROJECT_FILE and, when the manifest sets `root`, AC_PROJECT_ROOT.
+    ///
+    /// Reads the manifest only, so it works with the daemon stopped.
+    ///
+    /// Examples:
+    ///   ac shop scripts
+    ///   ac noveum forward status
+    Scripts,
+
+    #[command(external_subcommand)]
+    Script(Vec<String>),
 }
 
 #[derive(Args, Debug)]

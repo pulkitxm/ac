@@ -30,6 +30,8 @@ pub struct Manifest {
     pub builds: Vec<Build>,
     #[serde(default)]
     pub services: Vec<Service>,
+    #[serde(default)]
+    pub scripts: JsonMapOf<String>,
 }
 
 pub type JsonMapOf<T> = indexish::OrderedMap<T>;
@@ -222,6 +224,12 @@ impl Manifest {
         v.sort();
         v
     }
+    pub fn script(&self, name: &str) -> Option<&String> {
+        self.scripts.get(name)
+    }
+    pub fn script_names(&self) -> Vec<String> {
+        self.scripts.keys().map(str::to_string).collect()
+    }
 }
 
 pub struct Project {
@@ -367,6 +375,31 @@ containers are named after the file, so rename one of them to match",
             ));
         }
     }
+    for (script, body) in &manifest.scripts.0 {
+        if crate::cli::PROJECT_ACTIONS.contains(&script.as_str()) {
+            return Err(anyhow!(
+                "manifest {} declares the script '{}', which collides with the ac action of \
+the same name; rename the script",
+                file.display(),
+                script
+            ));
+        }
+        if script.is_empty() || script.starts_with('-') || script.contains(char::is_whitespace) {
+            return Err(anyhow!(
+                "manifest {} declares the script '{}'; script names must be single words \
+and cannot start with '-'",
+                file.display(),
+                script
+            ));
+        }
+        if body.trim().is_empty() {
+            return Err(anyhow!(
+                "manifest {} declares the script '{}' with an empty command",
+                file.display(),
+                script
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -445,6 +478,42 @@ mod tests {
             manifest: serde_json::from_str(raw).unwrap(),
             raw: raw.into(),
         }
+    }
+
+    #[test]
+    fn scripts_parse_and_resolve_in_declaration_order() {
+        let p = load(
+            r#"{"name":"m5","scripts":{
+                "forward": "~/.config/ac/scripts/tunnels.sh",
+                "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"}}"#,
+            "m5",
+        )
+        .unwrap();
+        assert_eq!(p.manifest.script_names(), vec!["forward", "psql"]);
+        assert_eq!(
+            p.manifest.script("forward").unwrap(),
+            "~/.config/ac/scripts/tunnels.sh"
+        );
+        assert!(p.manifest.script("nope").is_none());
+    }
+
+    #[test]
+    fn script_validation_rejects_bad_names_and_bodies() {
+        let clash = r#"{"name":"m6","scripts":{"logs":"echo x"}}"#;
+        let err = load(clash, "m6").err().unwrap();
+        assert!(err.to_string().contains("collides"), "{err}");
+
+        let spaced = r#"{"name":"m7","scripts":{"two words":"echo x"}}"#;
+        let err = load(spaced, "m7").err().unwrap();
+        assert!(err.to_string().contains("single words"), "{err}");
+
+        let dashed = r#"{"name":"m8","scripts":{"-x":"echo x"}}"#;
+        let err = load(dashed, "m8").err().unwrap();
+        assert!(err.to_string().contains("single words"), "{err}");
+
+        let empty = r#"{"name":"m9","scripts":{"x":"  "}}"#;
+        let err = load(empty, "m9").err().unwrap();
+        assert!(err.to_string().contains("empty command"), "{err}");
     }
 
     #[test]
