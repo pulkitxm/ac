@@ -135,7 +135,37 @@ where everything after the container or image is passed through untouched.
 
 Discovery commands that read only the manifest, so they work with the
 daemon stopped: `ac <project> services`, `ac <project> builds`,
-`ac <project> profiles`, `ac <project> config`, `ac <project> images`.
+`ac <project> profiles`, `ac <project> scripts`, `ac <project> config`,
+`ac <project> images`.
+
+## Project scripts
+
+A manifest may declare a `scripts` map, npm run style: a name mapped to one
+shell string. `ac <project> <name> [args...]` hands the string to `sh -c`,
+appending any extra arguments shell-quoted, and propagates its exit code. ac
+does not interpret the string at all; the script owns its own subcommands and
+flags, which is how project-specific tooling (ssh tunnels, port-forwards, db
+consoles) lives behind the ac front door without ac learning about it.
+
+```json
+"scripts": {
+  "forward": "~/.config/ac/scripts/noveum-tunnels.sh",
+  "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
+}
+```
+
+```
+ac noveum forward            the script decides what no-args means
+ac noveum forward status     extra words arrive as $1, $2, ...
+ac noveum psql -c 'select 1'
+ac noveum scripts            list what the manifest declares
+```
+
+The script inherits the caller's environment plus `AC_PROJECT`,
+`AC_PROJECT_FILE` (the manifest path) and, when the manifest sets `root`,
+`AC_PROJECT_ROOT`. Script names must be single words and cannot shadow ac's
+own project actions; the manifest is rejected loudly if they try. Shell
+completion offers script names next to the built-in actions.
 
 ## The rules that are different from docker
 

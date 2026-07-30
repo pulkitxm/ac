@@ -37,3 +37,6 @@ Orchestrate, do not micromanage:
 - Add a manifest in `~/.config/ac/projects/<name>.json` (schema: `ac schema`)
   when you need a multi-service stack with readiness gating; unknown fields
   are rejected by name.
+- A manifest may declare custom `scripts` (name to shell string). `ac
+  <project> <name> [args...]` runs the string with the args appended; the
+  script owns its own subcommands. Discover them with `ac <project> scripts`.
