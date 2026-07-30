@@ -221,6 +221,21 @@ pub fn manifest_schema() -> Value {
               "readyTimeout": { "type": "integer", "default": 90, "description": "Seconds before giving up. Start continues anyway, with a warning." }
             }
           }
+        },
+        "scripts": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "description":
+            "Custom commands. `ac <project> <name> [args...]` hands the mapped string to \
+             `sh -c`, appending any extra arguments shell-quoted (npm run style), and \
+             propagates its exit code. The string sees AC_PROJECT, AC_PROJECT_FILE and, \
+             when `root` is set, AC_PROJECT_ROOT. Names must be single words and must not \
+             collide with ac's own project actions. List them with `ac <project> scripts`; \
+             shell completion offers them next to the built-in actions.",
+          "examples": [{
+            "forward": "~/.config/ac/scripts/noveum-tunnels.sh",
+            "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
+          }]
         }
       },
       "$comment":
@@ -260,7 +275,11 @@ mod tests {
                 "volumes": [{ "name": "data", "target": "/data" }],
                 "args": ["redis-server"],
                 "readyCmd": ["redis-cli", "ping"], "readyTimeout": 30
-            }]
+            }],
+            "scripts": {
+                "forward": "~/.config/ac/scripts/tunnels.sh",
+                "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
+            }
         });
         let parsed: Result<crate::manifest::Manifest, _> = serde_json::from_value(doc);
         assert!(parsed.is_ok(), "{:?}", parsed.err());
