@@ -244,7 +244,12 @@ ac schema > manifest.schema.json
       "volumes": [{ "name": "redis-data", "target": "/data" }],
       "readyCmd": ["sh", "-c", "redis-cli ping | grep PONG"]
     }
-  ]
+  ],
+
+  "scripts": {
+    "forward": "~/.config/ac/scripts/shop-tunnels.sh",
+    "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
+  }
 }
 ```
 
@@ -264,6 +269,18 @@ ac schema > manifest.schema.json
   `container registry login --password-stdin`. Credentials are never stored in
   the manifest, which suits tokens that expire (ECR tokens last 12 hours, so
   this re-runs on every start).
+- `scripts` is a map of name to **one shell string**, npm run style.
+  `ac <project> <name> [args...]` hands the string to `sh -c` with the extra
+  arguments appended shell-quoted, and propagates the exit code. `ac` never
+  interprets the string: the script owns its own subcommands, which is how
+  project-specific tooling (ssh tunnels, port-forwards, db consoles) sits
+  behind `ac` without `ac` learning about it. The script sees `AC_PROJECT`,
+  `AC_PROJECT_FILE` and, when `root` is set, `AC_PROJECT_ROOT`. Names must be
+  single words and must not collide with a project action; validation rejects
+  the manifest otherwise, and the
+  `every_project_action_is_listed_in_project_actions` test keeps that
+  collision list in step with the CLI. Completion offers script names next to
+  the built-in actions.
 
 ### Interpolation
 
@@ -420,6 +437,8 @@ Sharp edges worth knowing:
 | `rollout [-P profile] [name...]` | Runs the profile's rollout hooks against images already pushed, without rebuilding. See [Rollouts](#rollouts). |
 | `login [-P profile]` | Runs each registry's `passwordCmd` into `container registry login --password-stdin`. |
 | `config` | The project manifest as written. |
+| `scripts` | The `scripts` map from the manifest. |
+| `<script> [args...]` | Any name from `scripts`: the string via `sh -c`, args appended shell-quoted. See [Field notes](#field-notes). |
 
 ### Global commands
 
@@ -705,6 +724,7 @@ directory, and every module is named after what it does.
 | `commands/docker/` | The manifest-free verbs: `target` resolves a name to a container, `opts` builds run argv, `lifecycle` is the container verbs, `images` the image and registry ones. |
 | `commands/groups.rs` | The noun groups. |
 | `commands/project.rs` | Project lifecycle: start, stop, down, readiness, login. |
+| `commands/script.rs` | Manifest `scripts`: compose the string plus quoted args, run via `sh -c`. |
 | `build/` | `vars` (interpolation, build root), `builder` (sizing), `plan` (argv per build), `reporter` (the live line), `run` (execution and summary), `rollout` (hooks). |
 | `daemon/` | The ownership contract, with `supervisor` next to it. |
 | `manifest/` | Manifest types and discovery, with `schema` next to it. |

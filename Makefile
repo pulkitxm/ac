@@ -37,7 +37,7 @@ dev: ## Fast unoptimised build, for iterating
 	'$(CARGO)' build
 
 test: ## Run the unit tests
-	'$(CARGO)' test
+	AC_HOME='$(CURDIR)' '$(CARGO)' test
 
 lint: ## Run clippy over all targets, warnings are errors
 	'$(CARGO)' clippy --all-targets -- -D warnings

@@ -3,6 +3,7 @@ set -uo pipefail
 
 AC="${AC_BIN:-$(cd "$(dirname "$0")/.." && pwd)/target/release/ac}"
 [ -x "$AC" ] || { echo "no binary at $AC, run: make build"; exit 1; }
+export AC_HOME="$(cd "$(dirname "$0")/.." && pwd)"
 
 pass=0
 fail=0
@@ -117,6 +118,13 @@ offers "ac shop export <tab>" "postgres" 3 ac shop export ""
 offers "ac shop push <tab>"   "web"      3 ac shop push ""
 omits  "ac shop push <tab>"   "postgres" 3 ac shop push ""
 offers "push takes a profile"   "--profile" 3 ac shop push ""
+
+echo "manifest scripts"
+offers "ac shop <tab>"          "psql"    2 ac shop ""
+offers "ac shop <tab>"          "tunnels" 2 ac shop ""
+offers "ac shop <tab>"          "scripts" 2 ac shop ""
+offers "ac shop ps<tab>"        "psql"    2 ac shop ps
+omits  "ac nosuchproject <tab>" "psql"    2 ac nosuchproject ""
 
 echo "global noun groups"
 offers "ac <tab>"          "ps"       1 ac ""

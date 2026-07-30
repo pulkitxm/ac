@@ -113,6 +113,13 @@ rejected by name, so typos surface immediately. `ac schema` prints the full
 JSON Schema, and the bundled `projects/shop.json` is a complete worked example
 with builds, profiles and registries.
 
+A manifest may also declare `scripts`, npm run style: a name mapped to one
+shell string. `ac <project> <name> [args...]` runs the string with `sh -c`,
+appending the extra arguments shell-quoted, so project-specific tooling (ssh
+tunnels, port-forwards, db consoles) lives behind the same front door. The
+script owns its own subcommands; `ac <project> scripts` lists what a project
+declares, and shell completion offers the names next to the built-in actions.
+
 ## Daemon ownership
 
 The part worth understanding, because it is the whole point of the tool.

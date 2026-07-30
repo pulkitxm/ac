@@ -8,7 +8,7 @@ use crate::build::{vars_for, BuildOverrides};
 use crate::cli::{
     Action, Cli, CompletionShell, DaemonAction, ImagesAction, TopCommand, VolumesAction,
 };
-use crate::commands::{docker, groups, project};
+use crate::commands::{docker, groups, project, script};
 use crate::core::ctx::Ctx;
 use crate::core::state::Snapshot;
 use crate::core::{ctx, style, util};
@@ -430,6 +430,13 @@ fn run_action(ctx: &Ctx, proj: &Project, action: &Action) -> Result<()> {
                 }
                 Ok(())
             }
+        }
+
+        Action::Scripts => script::list(ctx, proj),
+
+        Action::Script(argv) => {
+            let status = script::run(ctx, proj, argv)?;
+            exit_like(status)
         }
 
         Action::Ls { all: _ } => {

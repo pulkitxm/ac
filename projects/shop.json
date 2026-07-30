@@ -159,5 +159,9 @@
       ],
       "readyTimeout": 90
     }
-  ]
+  ],
+  "scripts": {
+    "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres",
+    "tunnels": "~/.config/ac/scripts/shop-tunnels.sh"
+  }
 }

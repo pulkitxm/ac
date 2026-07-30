@@ -4,7 +4,7 @@ use clap::{Arg, Command, CommandFactory};
 use clap_complete::engine::{ArgValueCandidates, ArgValueCompleter, PathCompleter, ValueCompleter};
 use clap_complete::CompletionCandidate;
 
-use crate::cli::{Cli, RESERVED};
+use crate::cli::{Cli, PROJECT_ACTIONS, RESERVED};
 use crate::core::ctx::Ctx;
 use crate::manifest;
 
@@ -47,6 +47,10 @@ pub fn completion_command() -> Command {
         let mut sub = Command::new(leaked).about(format!("Actions for {name}"));
         for action in template.get_subcommands() {
             sub = sub.subcommand(with_candidates(action.clone(), &name));
+        }
+        for script in script_names(&name) {
+            let s: &'static str = Box::leak(script.into_boxed_str());
+            sub = sub.subcommand(Command::new(s).about(format!("Script from {name}.json")));
         }
         cmd = cmd.subcommand(sub);
     }
@@ -243,6 +247,18 @@ fn profile_names(project: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn script_names(project: &str) -> Vec<String> {
+    load(project)
+        .map(|p| {
+            p.manifest
+                .script_names()
+                .into_iter()
+                .filter(|s| !PROJECT_ACTIONS.contains(&s.as_str()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,6 +323,18 @@ mod tests {
             .collect();
         assert!(ids.iter().any(|i| i == "names"), "build takes build names");
         assert!(ids.iter().any(|i| i == "profile"), "build takes a profile");
+    }
+
+    #[test]
+    fn manifest_scripts_complete_as_project_subcommands() {
+        let cmd = completion_command();
+        let proj = sub(&cmd, "shop").expect("shop");
+        assert!(
+            sub(proj, "psql").is_some(),
+            "scripts declared in the manifest must complete under the project"
+        );
+        assert!(sub(proj, "tunnels").is_some());
+        assert!(script_names("does-not-exist").is_empty());
     }
 
     #[test]
