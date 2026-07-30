@@ -281,6 +281,11 @@ ac schema > manifest.schema.json
   `every_project_action_is_listed_in_project_actions` test keeps that
   collision list in step with the CLI. Completion offers script names next to
   the built-in actions.
+- A script entry may instead be `{"run": <string>, "complete": [<word>...]}`.
+  `complete` is what TAB offers for the script's arguments, at every argument
+  position. ac deliberately never executes a script to complete it (a
+  completer that runs user code could hang the shell or dial out), so the
+  words are static data in the manifest.
 
 ### Interpolation
 
