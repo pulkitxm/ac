@@ -31,7 +31,7 @@ pub fn run(ctx: &Ctx, proj: &Project, argv: &[String]) -> Result<ExitStatus> {
         ));
     };
 
-    let cmd = compose(script, &argv[1..]);
+    let cmd = compose(script.run(), &argv[1..]);
     let mut envs: Vec<(String, String)> = vec![
         ("AC_PROJECT".into(), proj.name.clone()),
         (
@@ -50,7 +50,7 @@ pub fn list(ctx: &Ctx, proj: &Project) -> Result<()> {
     if ctx.json {
         let mut map = serde_json::Map::new();
         for (name, body) in scripts {
-            map.insert(name.clone(), serde_json::Value::String(body.clone()));
+            map.insert(name.clone(), serde_json::to_value(body)?);
         }
         return ctx.emit_json(&serde_json::Value::Object(map));
     }
@@ -64,7 +64,7 @@ pub fn list(ctx: &Ctx, proj: &Project) -> Result<()> {
     }
     let mut table = util::Table::new(&["NAME", "RUNS"]);
     for (name, body) in scripts {
-        table.row([name.as_str(), body.as_str()]);
+        table.row([name.as_str(), body.run()]);
     }
     table.print(ctx);
     Ok(())

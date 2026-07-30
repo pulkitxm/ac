@@ -31,7 +31,7 @@ pub struct Manifest {
     #[serde(default)]
     pub services: Vec<Service>,
     #[serde(default)]
-    pub scripts: JsonMapOf<String>,
+    pub scripts: JsonMapOf<Script>,
 }
 
 pub type JsonMapOf<T> = indexish::OrderedMap<T>;
@@ -41,8 +41,14 @@ pub mod indexish {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use serde_json::{Map, Value};
 
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone)]
     pub struct OrderedMap<T>(pub Vec<(String, T)>);
+
+    impl<T> Default for OrderedMap<T> {
+        fn default() -> Self {
+            OrderedMap(Vec::new())
+        }
+    }
 
     impl<T> OrderedMap<T> {
         pub fn get(&self, k: &str) -> Option<&T> {
@@ -224,11 +230,65 @@ impl Manifest {
         v.sort();
         v
     }
-    pub fn script(&self, name: &str) -> Option<&String> {
+    pub fn script(&self, name: &str) -> Option<&Script> {
         self.scripts.get(name)
     }
     pub fn script_names(&self) -> Vec<String> {
         self.scripts.keys().map(str::to_string).collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Script {
+    Command(String),
+    Full(ScriptFull),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScriptFull {
+    pub run: String,
+    #[serde(default)]
+    pub complete: Vec<String>,
+}
+
+impl Script {
+    pub fn run(&self) -> &str {
+        match self {
+            Script::Command(s) => s,
+            Script::Full(f) => &f.run,
+        }
+    }
+    pub fn complete(&self) -> &[String] {
+        match self {
+            Script::Command(_) => &[],
+            Script::Full(f) => &f.complete,
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Script {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let v = Value::deserialize(d)?;
+        match v {
+            Value::String(s) => Ok(Script::Command(s)),
+            Value::Object(_) => ScriptFull::deserialize(v)
+                .map(Script::Full)
+                .map_err(serde::de::Error::custom),
+            other => Err(serde::de::Error::custom(format!(
+                "a script must be a shell string or an object with `run` and `complete`, \
+got {other}"
+            ))),
+        }
+    }
+}
+
+impl Serialize for Script {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Script::Command(c) => s.serialize_str(c),
+            Script::Full(f) => f.serialize(s),
+        }
     }
 }
 
@@ -392,12 +452,23 @@ and cannot start with '-'",
                 script
             ));
         }
-        if body.trim().is_empty() {
+        if body.run().trim().is_empty() {
             return Err(anyhow!(
                 "manifest {} declares the script '{}' with an empty command",
                 file.display(),
                 script
             ));
+        }
+        for word in body.complete() {
+            if word.is_empty() || word.contains(char::is_whitespace) {
+                return Err(anyhow!(
+                    "manifest {} script '{}' lists the completion word '{}'; completion \
+words must be single words",
+                    file.display(),
+                    script,
+                    word
+                ));
+            }
         }
     }
     Ok(())
@@ -484,17 +555,35 @@ mod tests {
     fn scripts_parse_and_resolve_in_declaration_order() {
         let p = load(
             r#"{"name":"m5","scripts":{
-                "forward": "~/.config/ac/scripts/tunnels.sh",
+                "forward": {"run": "~/.config/ac/scripts/tunnels.sh",
+                            "complete": ["status", "stop", "pg"]},
                 "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"}}"#,
             "m5",
         )
         .unwrap();
         assert_eq!(p.manifest.script_names(), vec!["forward", "psql"]);
-        assert_eq!(
-            p.manifest.script("forward").unwrap(),
-            "~/.config/ac/scripts/tunnels.sh"
-        );
+        let fwd = p.manifest.script("forward").unwrap();
+        assert_eq!(fwd.run(), "~/.config/ac/scripts/tunnels.sh");
+        assert_eq!(fwd.complete(), ["status", "stop", "pg"]);
+        let psql = p.manifest.script("psql").unwrap();
+        assert!(psql.run().starts_with("psql"));
+        assert!(psql.complete().is_empty());
         assert!(p.manifest.script("nope").is_none());
+    }
+
+    #[test]
+    fn script_object_form_rejects_unknown_fields_and_bad_words() {
+        let typo = r#"{"name":"m11","scripts":{"x":{"run":"echo","complet":["a"]}}}"#;
+        let err = load(typo, "m11").err().unwrap();
+        assert!(err.to_string().contains("complet"), "{err}");
+
+        let spaced = r#"{"name":"m12","scripts":{"x":{"run":"echo","complete":["a b"]}}}"#;
+        let err = load(spaced, "m12").err().unwrap();
+        assert!(err.to_string().contains("single words"), "{err}");
+
+        let listed = r#"{"name":"m13","scripts":{"x":["echo"]}}"#;
+        let err = load(listed, "m13").err().unwrap();
+        assert!(err.to_string().contains("shell string"), "{err}");
     }
 
     #[test]
