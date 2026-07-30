@@ -224,16 +224,40 @@ pub fn manifest_schema() -> Value {
         },
         "scripts": {
           "type": "object",
-          "additionalProperties": { "type": "string" },
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["run"],
+                "properties": {
+                  "run": { "type": "string" },
+                  "complete": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description":
+                      "Words TAB offers for the script's arguments, at every position. \
+                       ac never runs the script to complete it, so list the subcommands \
+                       and targets the script understands."
+                  }
+                }
+              }
+            ]
+          },
           "description":
-            "Custom commands. `ac <project> <name> [args...]` hands the mapped string to \
-             `sh -c`, appending any extra arguments shell-quoted (npm run style), and \
-             propagates its exit code. The string sees AC_PROJECT, AC_PROJECT_FILE and, \
-             when `root` is set, AC_PROJECT_ROOT. Names must be single words and must not \
-             collide with ac's own project actions. List them with `ac <project> scripts`; \
-             shell completion offers them next to the built-in actions.",
+            "Custom commands. `ac <project> <name> [args...]` hands the mapped string (or \
+             the object's `run`) to `sh -c`, appending any extra arguments shell-quoted \
+             (npm run style), and propagates its exit code. The string sees AC_PROJECT, \
+             AC_PROJECT_FILE and, when `root` is set, AC_PROJECT_ROOT. Names must be \
+             single words and must not collide with ac's own project actions. List them \
+             with `ac <project> scripts`; shell completion offers the names next to the \
+             built-in actions and the `complete` words after them.",
           "examples": [{
-            "forward": "~/.config/ac/scripts/noveum-tunnels.sh",
+            "forward": {
+              "run": "~/.config/ac/scripts/noveum-tunnels.sh",
+              "complete": ["up", "restart", "stop", "status", "logs", "pg", "ch", "all"]
+            },
             "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
           }]
         }
@@ -277,7 +301,10 @@ mod tests {
                 "readyCmd": ["redis-cli", "ping"], "readyTimeout": 30
             }],
             "scripts": {
-                "forward": "~/.config/ac/scripts/tunnels.sh",
+                "forward": {
+                    "run": "~/.config/ac/scripts/tunnels.sh",
+                    "complete": ["up", "status", "stop", "pg"]
+                },
                 "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
             }
         });

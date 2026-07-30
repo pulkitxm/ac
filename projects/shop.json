@@ -162,6 +162,18 @@
   ],
   "scripts": {
     "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres",
-    "tunnels": "~/.config/ac/scripts/shop-tunnels.sh"
+    "tunnels": {
+      "run": "~/.config/ac/scripts/shop-tunnels.sh",
+      "complete": [
+        "up",
+        "restart",
+        "stop",
+        "status",
+        "logs",
+        "db",
+        "metrics",
+        "all"
+      ]
+    }
   }
 }

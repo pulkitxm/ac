@@ -125,6 +125,11 @@ offers "ac shop <tab>"          "tunnels" 2 ac shop ""
 offers "ac shop <tab>"          "scripts" 2 ac shop ""
 offers "ac shop ps<tab>"        "psql"    2 ac shop ps
 omits  "ac nosuchproject <tab>" "psql"    2 ac nosuchproject ""
+offers "ac shop tunnels <tab>"        "status"  3 ac shop tunnels ""
+offers "ac shop tunnels <tab>"        "db"      3 ac shop tunnels ""
+offers "ac shop tunnels stop <tab>"   "metrics" 4 ac shop tunnels stop ""
+omits  "ac shop tunnels <tab>"        "postgres" 3 ac shop tunnels ""
+omits  "ac shop psql <tab>"           "status"  3 ac shop psql ""
 
 echo "global noun groups"
 offers "ac <tab>"          "ps"       1 ac ""

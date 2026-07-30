@@ -48,9 +48,18 @@ pub fn completion_command() -> Command {
         for action in template.get_subcommands() {
             sub = sub.subcommand(with_candidates(action.clone(), &name));
         }
-        for script in script_names(&name) {
+        for (script, words) in scripts(&name) {
             let s: &'static str = Box::leak(script.into_boxed_str());
-            sub = sub.subcommand(Command::new(s).about(format!("Script from {name}.json")));
+            let mut c = Command::new(s).about(format!("Script from {name}.json"));
+            if !words.is_empty() {
+                c = c.arg(
+                    Arg::new("args")
+                        .num_args(0..)
+                        .allow_hyphen_values(true)
+                        .add(ArgValueCandidates::new(move || candidates(words.clone()))),
+                );
+            }
+            sub = sub.subcommand(c);
         }
         cmd = cmd.subcommand(sub);
     }
@@ -247,13 +256,15 @@ fn profile_names(project: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn script_names(project: &str) -> Vec<String> {
+fn scripts(project: &str) -> Vec<(String, Vec<String>)> {
     load(project)
         .map(|p| {
             p.manifest
-                .script_names()
-                .into_iter()
-                .filter(|s| !PROJECT_ACTIONS.contains(&s.as_str()))
+                .scripts
+                .0
+                .iter()
+                .filter(|(name, _)| !PROJECT_ACTIONS.contains(&name.as_str()))
+                .map(|(name, s)| (name.clone(), s.complete().to_vec()))
                 .collect()
         })
         .unwrap_or_default()
@@ -334,7 +345,29 @@ mod tests {
             "scripts declared in the manifest must complete under the project"
         );
         assert!(sub(proj, "tunnels").is_some());
-        assert!(script_names("does-not-exist").is_empty());
+        assert!(scripts("does-not-exist").is_empty());
+    }
+
+    #[test]
+    fn script_complete_words_become_argument_candidates() {
+        let cmd = completion_command();
+        let proj = sub(&cmd, "shop").expect("shop");
+        let tunnels = sub(proj, "tunnels").expect("tunnels script");
+        assert!(
+            tunnels.get_arguments().any(|a| a.get_id() == "args"),
+            "a script with `complete` words must take an argument that offers them"
+        );
+        let psql = sub(proj, "psql").expect("psql script");
+        assert!(
+            psql.get_arguments().next().is_none(),
+            "a plain string script declares no completion words, so no argument"
+        );
+        let declared = scripts("shop");
+        let tunnel_words = &declared.iter().find(|(n, _)| n == "tunnels").unwrap().1;
+        assert!(
+            tunnel_words.iter().any(|w| w == "status"),
+            "{tunnel_words:?}"
+        );
     }
 
     #[test]

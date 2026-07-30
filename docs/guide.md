@@ -149,7 +149,10 @@ consoles) lives behind the ac front door without ac learning about it.
 
 ```json
 "scripts": {
-  "forward": "~/.config/ac/scripts/noveum-tunnels.sh",
+  "forward": {
+    "run": "~/.config/ac/scripts/noveum-tunnels.sh",
+    "complete": ["up", "restart", "stop", "status", "logs", "pg", "ch", "all"]
+  },
   "psql": "psql -h 127.0.0.1 -p 5433 -U user postgres"
 }
 ```
@@ -166,6 +169,11 @@ The script inherits the caller's environment plus `AC_PROJECT`,
 `AC_PROJECT_ROOT`. Script names must be single words and cannot shadow ac's
 own project actions; the manifest is rejected loudly if they try. Shell
 completion offers script names next to the built-in actions.
+
+A script entry is either a plain string or `{"run": ..., "complete": [...]}`.
+The `complete` words are what TAB offers for the script's arguments, at every
+position: ac never executes a script to complete it, so the manifest simply
+lists the subcommands and targets the script understands.
 
 ## The rules that are different from docker
 
