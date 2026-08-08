@@ -17,8 +17,7 @@ $ ac shop start
 
 ## Install
 
-You need an Apple Silicon Mac on macOS 15 or newer, and a Rust toolchain to
-build the binary.
+You need an Apple Silicon Mac on macOS 15 or newer, and a Rust toolchain.
 
 1. Install Apple `container` (1.1.0 or newer). Download the signed `.pkg`
    installer from the
@@ -32,7 +31,7 @@ build the binary.
    You do not need to start anything: `ac` starts and stops the daemon itself,
    exactly when it is needed.
 
-2. Install `ac` from crates.io:
+2. Install `ac`:
 
    ```bash
    cargo install ac-cli
@@ -42,22 +41,10 @@ build the binary.
    build to macOS, so `cargo install` succeeds anywhere, but the binary drives
    Apple `container` and is useless without it.
 
-   To build from a checkout instead:
-
-   ```bash
-   git clone https://github.com/pulkitxm/ac.git
-   cd ac
-   make install
-   ```
-
-   This builds the release binary and symlinks it into `~/.local/bin` (override
-   with `BIN_DIR=...` or `BIN_NAME=...`). If your Rust toolchain lives outside
-   `~/.cargo`, point at it in an untracked `Makefile.local`:
-
-   ```make
-   CARGO_HOME  := /path/to/cargo
-   RUSTUP_HOME := /path/to/rustup
-   ```
+   To build from a checkout instead, clone the repo and run `make install`,
+   which symlinks the release binary into `~/.local/bin`. See
+   [CLAUDE.md](CLAUDE.md) for `BIN_DIR`, `BIN_NAME` and pointing at a toolchain
+   outside `~/.cargo`.
 
 3. Wire up your shell, in `~/.zshrc`:
 
