@@ -301,10 +301,34 @@ function pushPages(pages) {
     cwd: dir,
     stdio: "inherit",
   });
-  execFileSync("git", ["push", "origin", "HEAD"], {
-    cwd: dir,
-    stdio: "inherit",
-  });
+  try {
+    execFileSync("git", ["push", "origin", "HEAD"], {
+      cwd: dir,
+      stdio: "inherit",
+    });
+  } catch {
+    if (!cloned) {
+      console.error(
+        [
+          "",
+          `Could not push to ${wikiDisplay}.`,
+          "",
+          "The wiki has never been created, and GitHub only provisions the wiki",
+          "git repository once its first page exists. Enabling the wiki in repo",
+          "settings is not enough, and there is no API for it.",
+          "",
+          `Fix it once, by hand: open https://github.com/${owner}/${repo}/wiki,`,
+          "click 'Create the first page', save anything at all, then re-run this",
+          "workflow. Every page is overwritten on the next sync, so what you type",
+          "does not matter.",
+          "",
+        ].join("\n"),
+      );
+      process.exit(1);
+    }
+    console.error(`\nPush to ${wikiDisplay} failed.\n`);
+    process.exit(1);
+  }
   console.log(`Pushed ${pages.size} pages to ${wikiDisplay}`);
 }
 
