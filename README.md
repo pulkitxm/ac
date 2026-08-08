@@ -42,9 +42,15 @@ You need an Apple Silicon Mac on macOS 15 or newer, and a Rust toolchain.
    Apple `container` and is useless without it.
 
    To build from a checkout instead, clone the repo and run `make install`,
-   which symlinks the release binary into `~/.local/bin`. See
-   [CLAUDE.md](CLAUDE.md) for `BIN_DIR`, `BIN_NAME` and pointing at a toolchain
-   outside `~/.cargo`.
+   which symlinks the release binary into `~/.local/bin`. Override the
+   destination with `BIN_DIR=...` and the installed name with `BIN_NAME=...`.
+   If your Rust toolchain lives outside `~/.cargo`, point at it from an
+   untracked `Makefile.local`:
+
+   ```make
+   CARGO_HOME  := /path/to/cargo
+   RUSTUP_HOME := /path/to/rustup
+   ```
 
 3. Wire up your shell, in `~/.zshrc`:
 
@@ -54,7 +60,7 @@ You need an Apple Silicon Mac on macOS 15 or newer, and a Rust toolchain.
    ```
 
    Other shells, and what gets completed, are in
-   [Completions](docs/cli/completions.md).
+   [Completions](https://github.com/pulkitxm/ac/wiki/CLI-Completions).
 
 ## Quickstart
 
@@ -93,27 +99,28 @@ which stands in for the healthcheck primitive Apple `container` does not have.
 Containers are named `<project>-<service>`, and unknown manifest fields are
 rejected by name so typos surface immediately. Every field, including builds,
 profiles, registries and scripts, is in the
-[Manifest reference](docs/cli/manifest.md).
+[Manifest reference](https://github.com/pulkitxm/ac/wiki/CLI-Manifest).
 
 ## Documentation
 
-The full CLI reference is in [`docs/cli/`](docs/cli/README.md), and is
-published to the [wiki](https://github.com/pulkitxm/ac/wiki). `ac guide` prints
-a manual from inside the binary, and every `--help` is written to be read cold.
+The full CLI reference is in the
+[wiki](https://github.com/pulkitxm/ac/wiki), generated from
+[`docs/cli/`](docs/cli/) on every push to `main`. `ac guide` prints a manual
+from inside the binary, and every `--help` is written to be read cold.
 
 | Page | What it covers |
 | --- | --- |
-| [CLI reference](docs/cli/README.md) | The two invocation forms, reserved words, docker-to-ac translation table |
-| [Global flags](docs/cli/global-flags.md) | `--json`, `--quiet`, `--no-color`, `-p`, every environment variable, exit codes |
-| [Containers](docs/cli/containers.md) | `run`, `create`, `start`, `stop`, `exec`, `logs`, `cp`, and the rest of the manifest-free verbs |
-| [Images and registries](docs/cli/images-and-registries.md) | `build`, `pull`, `push`, `tag`, `login`, and the `image` / `registry` groups |
-| [Project commands](docs/cli/project-commands.md) | Every `ac <project> <action>`, with flags and readiness semantics |
-| [Builds](docs/cli/builds.md) | Profiles, precedence, build root resolution, interpolation, live progress |
-| [Rollouts](docs/cli/rollouts.md) | Post-push hooks and the environment handed to them |
-| [Manifest](docs/cli/manifest.md) | Field-by-field schema, discovery, private registries, `scripts` |
-| [Daemon and system](docs/cli/daemon-and-system.md) | Ownership, the supervisor, `ps`, `status`, `system`, `volume`, `network`, `builder`, `ac config` |
-| [Completions](docs/cli/completions.md) | Shell setup and what completes |
-| [Agents and JSON](docs/cli/agents-and-json.md) | Driving `ac` from scripts, CI and coding agents |
+| [CLI reference](https://github.com/pulkitxm/ac/wiki/CLI) | The two invocation forms, reserved words, docker-to-ac translation table |
+| [Global flags](https://github.com/pulkitxm/ac/wiki/CLI-Global-Flags) | `--json`, `--quiet`, `--no-color`, `-p`, every environment variable, exit codes |
+| [Containers](https://github.com/pulkitxm/ac/wiki/CLI-Containers) | `run`, `create`, `start`, `stop`, `exec`, `logs`, `cp`, and the rest of the manifest-free verbs |
+| [Images and registries](https://github.com/pulkitxm/ac/wiki/CLI-Images-and-Registries) | `build`, `pull`, `push`, `tag`, `login`, and the `image` / `registry` groups |
+| [Project commands](https://github.com/pulkitxm/ac/wiki/CLI-Project-Commands) | Every `ac <project> <action>`, with flags and readiness semantics |
+| [Builds](https://github.com/pulkitxm/ac/wiki/CLI-Builds) | Profiles, precedence, build root resolution, interpolation, live progress |
+| [Rollouts](https://github.com/pulkitxm/ac/wiki/CLI-Rollouts) | Post-push hooks and the environment handed to them |
+| [Manifest](https://github.com/pulkitxm/ac/wiki/CLI-Manifest) | Field-by-field schema, discovery, private registries, `scripts` |
+| [Daemon and system](https://github.com/pulkitxm/ac/wiki/CLI-Daemon-and-System) | Ownership, the supervisor, `ps`, `status`, `system`, `volume`, `network`, `builder`, `ac config` |
+| [Completions](https://github.com/pulkitxm/ac/wiki/CLI-Completions) | Shell setup and what completes |
+| [Agents and JSON](https://github.com/pulkitxm/ac/wiki/CLI-Agents-and-JSON) | Driving `ac` from scripts, CI and coding agents |
 
 ## Daemon ownership
 
@@ -130,7 +137,7 @@ you ran `ac <project> stop`, the containers exited on their own, or they
 crashed. Ownership lives in a file rather than in memory, so a second `ac`
 invocation from another terminal makes the same decision, and the refcount
 spans **all** projects. Full contract in
-[Daemon and system](docs/cli/daemon-and-system.md).
+[Daemon and system](https://github.com/pulkitxm/ac/wiki/CLI-Daemon-and-System).
 
 ## Two surfaces
 
@@ -148,7 +155,7 @@ ac logs -f app-dev                 # follow it
 Do not write a manifest just to run one container. Both surfaces mirror docker,
 the noun groups (`ac ps`, `ac image ls`, `ac volume prune`) and the verbs alike,
 with `--json` on every read. The
-[CLI reference](docs/cli/README.md) has the complete list.
+[CLI reference](https://github.com/pulkitxm/ac/wiki/CLI) has the complete list.
 
 ## Notes on Apple Container
 
@@ -162,5 +169,5 @@ with `--json` on every read. The
   which is why the example manifests point `PGDATA` at a subdirectory. This
   does not happen on Docker, where volumes are plain directories.
 
-The rest of the sharp edges, and what `ac` does about each, are in
-[CLAUDE.md](CLAUDE.md).
+The rest of the sharp edges, and what `ac` does about each, are called out
+throughout the [wiki](https://github.com/pulkitxm/ac/wiki).
