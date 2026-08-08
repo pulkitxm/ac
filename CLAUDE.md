@@ -151,6 +151,27 @@ exec searches the PATH make itself started with rather than the exported one.
 That is why `CARGO` is an absolute path, quoted at every use site (the
 toolchain path may contain a space).
 
+## Publishing
+
+The crate is **`ac-cli`**, the binary is **`ac`**. They differ because `ac` was
+already taken on crates.io by an unrelated project whose only version is
+yanked, and a yanked name is never released. `[[bin]] name = "ac"` is what
+keeps `cargo install ac-cli` putting `ac` on the PATH, so it must not be
+dropped in favour of the package name.
+
+`exclude` keeps `.github/`, `tests/` and `projects/` out of the published
+tarball. `projects/` in particular would be actively misleading: `ac_home()`
+finds bundled manifests by walking up from the executable, and nothing above
+`~/.cargo/bin/ac` has a `projects/` directory, so a bundled manifest could
+never be discovered by an installed binary. `docs/` must stay, because
+`dispatch.rs` embeds both files there with `include_str!`.
+
+Nothing in the source is gated on `target_os`; `ac` shells out to `container`
+and compiles cleanly on Linux. That is deliberate, so docs.rs and non-macOS CI
+build it, at the cost of `cargo install` succeeding on a platform where the
+binary cannot do anything. The description and README say so rather than a
+`compile_error!`.
+
 ## Manifest schema
 
 A project is a JSON file. Discovery, highest priority first:
