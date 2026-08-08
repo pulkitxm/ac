@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Enforce the no-comments policy from CLAUDE.md
+      - name: Enforce the no-comments policy
         run: |
           rust=$(grep -nE '^\s*//' src/*.rs | grep -v '^src/cli.rs' || true)
           if [ -n "$rust" ]; then echo "$rust"; exit 1; fi

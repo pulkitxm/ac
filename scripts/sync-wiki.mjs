@@ -24,7 +24,6 @@ const GUIDES = [
     slug: "Claude-Snippet",
     title: "Claude Snippet",
   },
-  { src: "CLAUDE.md", slug: "Operating-Manual", title: "Operating Manual" },
 ];
 
 const SMALL = new Set([

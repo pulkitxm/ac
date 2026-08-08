@@ -166,8 +166,7 @@ nothing above `~/.cargo/bin/ac` has a `projects/` directory, so a bundled
 manifest could never be discovered by an installed binary. `scripts/` is wiki
 tooling that only `wiki-sync.yml` runs, from the git checkout rather than the
 crate. `docs/` must stay: `dispatch.rs` embeds `guide.md` and
-`claude-snippet.md` with `include_str!`, and `docs/cli/` is what the README
-links to.
+`claude-snippet.md` with `include_str!`.
 
 0.3.2 shipped `scripts/sync-wiki.mjs` before this was tightened. A published
 version is immutable, so that tarball stays as it is; the exclusion applies
@@ -874,6 +873,13 @@ means editing the matching page**, or the two drift:
 push to `main` via `scripts/sync-wiki.mjs`, which rewrites relative markdown
 links into wiki slugs. The wiki is generated output: edit `docs/`, never the
 wiki. Run `node scripts/sync-wiki.mjs --out /tmp/wiki` to preview locally.
+
+The wiki is the public home of the reference, so `README.md` and `Cargo.toml`'s
+`documentation` field link to `https://github.com/pulkitxm/ac/wiki/<slug>`
+rather than to files under `docs/cli/`. Slugs come from `sync-wiki.mjs`:
+`docs/cli/README.md` is `CLI`, and every other page is `CLI-<Title-Case-Name>`,
+so **renaming a page under `docs/cli/` breaks the README links** and both must
+move together. This file is deliberately not published to the wiki.
 
 ## Testing
 

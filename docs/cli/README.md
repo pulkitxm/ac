@@ -329,6 +329,5 @@ Every other page in this reference, and what it is for.
 | [Shell completion](completions.md) | The `COMPLETE=<shell>` hook versus the static script, what completes where, the bounded daemon-backed completers, `AC_COMPLETE_OFFLINE`, and troubleshooting. |
 
 Outside this directory: the [project README](../../README.md) for install and a
-quickstart, [`docs/guide.md`](../guide.md) for the manual `ac guide` prints from
-inside the binary, and [`CLAUDE.md`](../../CLAUDE.md) for the operating manual
-the implementation is held to.
+quickstart, and [`docs/guide.md`](../guide.md) for the manual `ac guide` prints
+from inside the binary.
