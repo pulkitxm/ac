@@ -32,7 +32,17 @@ build the binary.
    You do not need to start anything: `ac` starts and stops the daemon itself,
    exactly when it is needed.
 
-2. Build and install `ac`:
+2. Install `ac` from crates.io:
+
+   ```bash
+   cargo install ac-cli
+   ```
+
+   The crate is `ac-cli`; the binary it installs is `ac`. Nothing gates the
+   build to macOS, so `cargo install` succeeds anywhere, but the binary drives
+   Apple `container` and is useless without it.
+
+   To build from a checkout instead:
 
    ```bash
    git clone https://github.com/pulkitxm/ac.git

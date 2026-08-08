@@ -151,6 +151,53 @@ exec searches the PATH make itself started with rather than the exported one.
 That is why `CARGO` is an absolute path, quoted at every use site (the
 toolchain path may contain a space).
 
+## Publishing
+
+The crate is **`ac-cli`**, the binary is **`ac`**. They differ because `ac` was
+already taken on crates.io by an unrelated project whose only version is
+yanked, and a yanked name is never released. `[[bin]] name = "ac"` is what
+keeps `cargo install ac-cli` putting `ac` on the PATH, so it must not be
+dropped in favour of the package name.
+
+`exclude` keeps `.github/`, `tests/` and `projects/` out of the published
+tarball. `projects/` in particular would be actively misleading: `ac_home()`
+finds bundled manifests by walking up from the executable, and nothing above
+`~/.cargo/bin/ac` has a `projects/` directory, so a bundled manifest could
+never be discovered by an installed binary. `docs/` must stay, because
+`dispatch.rs` embeds both files there with `include_str!`.
+
+Nothing in the source is gated on `target_os`; `ac` shells out to `container`
+and compiles cleanly on Linux. That is deliberate, so docs.rs and non-macOS CI
+build it, at the cost of `cargo install` succeeding on a platform where the
+binary cannot do anything. The description and README say so rather than a
+`compile_error!`.
+
+### The publish workflow
+
+`.github/workflows/publish.yml` runs on every push to `main`, so **a release is
+a version bump**: edit `version` in `Cargo.toml`, merge, and the workflow
+publishes. Nothing else is a release trigger, and there are no tags to
+remember.
+
+The workflow is idempotent, which is what makes "publish on every merge" safe.
+It reads the version from `cargo metadata` and asks crates.io whether that
+exact version exists:
+
+- **200** — already published, so the job prints that and stops. Every merge
+  that does not touch the version is a green no-op.
+- **404** — not published, so it runs `cargo test` and then `cargo publish`.
+- **anything else** — the job fails rather than guess. A 5xx or a rate limit
+  must never be read as "not published yet", because publishing is
+  irreversible: a version can be yanked, which only hides it from new
+  dependents, but it can never be reused or truly withdrawn.
+
+It runs on `ubuntu-latest`, which is only possible because of the no-`cfg`
+decision above; the rest of CI is on `macos-latest`.
+
+The token is the repo secret `CARGO_REGISTRY_TOKEN`, passed through the
+environment rather than `--token` so it stays out of the process list. Without
+it the publish step fails with instructions rather than a cargo backtrace.
+
 ## Manifest schema
 
 A project is a JSON file. Discovery, highest priority first:
