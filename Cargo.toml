@@ -1,6 +1,6 @@
 [package]
 name = "ac-cli"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 rust-version = "1.80"
 description = "Apple Container project runner: a docker-compatible CLI and compose-style stack orchestrator for Apple container. macOS only."

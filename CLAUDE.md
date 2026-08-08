@@ -168,9 +168,9 @@ tooling that only `wiki-sync.yml` runs, from the git checkout rather than the
 crate. `docs/` must stay: `dispatch.rs` embeds `guide.md` and
 `claude-snippet.md` with `include_str!`.
 
-0.3.2 shipped `scripts/sync-wiki.mjs` before this was tightened. A published
-version is immutable, so that tarball stays as it is; the exclusion applies
-from the next version bump onward.
+0.3.2 shipped `scripts/sync-wiki.mjs` before this was tightened, and was
+yanked. A published version is immutable, so that tarball stays as it is; the
+exclusion takes effect from 0.3.3 onward.
 
 Nothing in the source is gated on `target_os`; `ac` shells out to `container`
 and compiles cleanly on Linux. That is deliberate, so docs.rs and non-macOS CI
