@@ -791,6 +791,33 @@ complete when adding commands.
 Dockerfile) used by the e2e suite and for manually exercising builds; recreate
 it from `tests/e2e.sh` if it is missing.
 
+## The CLI reference under docs/cli/
+
+`docs/cli/` is the exhaustive user-facing reference: one page per area, every
+command, every flag with its short form and default, and what each runs
+underneath. It is not embedded in the binary, unlike `docs/guide.md`. This file
+stays the operating manual (why things are the way they are); `docs/cli/` is
+the surface (what exists and what it does). **Adding or changing a command
+means editing the matching page**, or the two drift:
+
+| Page | Owns |
+| --- | --- |
+| `README.md` | The two invocation forms, `RESERVED`, docker-to-ac table |
+| `global-flags.md` | `src/cli/root.rs` global flags, every env var, exit codes |
+| `containers.md` | The manifest-free container verbs and all of `RunOpts` |
+| `images-and-registries.md` | Image and registry verbs, `image`/`registry` groups |
+| `project-commands.md` | Every `Action` in `src/cli/project.rs` |
+| `builds.md`, `rollouts.md` | `src/build/` |
+| `manifest.md` | The serde types in `src/manifest/` |
+| `daemon-and-system.md` | `src/daemon/`, the noun groups, daemon gating |
+| `completions.md` | `src/completions.rs` |
+| `agents-and-json.md` | `--json` shapes and scripting patterns |
+
+`.github/workflows/wiki-sync.yml` publishes `docs/` to the repo wiki on every
+push to `main` via `scripts/sync-wiki.mjs`, which rewrites relative markdown
+links into wiki slugs. The wiki is generated output: edit `docs/`, never the
+wiki. Run `node scripts/sync-wiki.mjs --out /tmp/wiki` to preview locally.
+
 ## Testing
 
 ```
