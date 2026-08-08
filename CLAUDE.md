@@ -382,8 +382,11 @@ Daemon gating splits three ways, extending the read/mutate rule below:
   `sh`, `logout`, `save`) call `daemon::require` and fail with a hint rather
   than starting a daemon for a read.
 - **Mutations that leave nothing behind** (`build`, `pull`, `push`, `tag`,
-  `load`, `login`, `rm`, `kill`, `stop`) ensure the daemon and run the refcount
-  check afterwards, so a daemon started for a one-off is released again.
+  `load`, `login`) ensure the daemon and run the refcount check afterwards, so a
+  daemon started for a one-off is released again.
+- **Mutations against an existing container** (`stop`, `rm`, `kill`) call
+  `daemon::require`, not `ensure`, because with the daemon down there is nothing
+  to act on, and then run the refcount check so an ac-owned daemon is released.
 - **Mutations that leave a container running** (`run`, `create`, `start`,
   `restart`) additionally spawn the supervisor, because the daemon must stay up
   and must still be reaped once the container goes.
