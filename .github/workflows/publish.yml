@@ -1,0 +1,68 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Read the version from Cargo.toml
+        id: version
+        run: |
+          version=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
+          if [ -z "$version" ] || [ "$version" = "null" ]; then
+            echo "could not read a version from Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether that version is already on crates.io
+        id: check
+        run: |
+          url="https://crates.io/api/v1/crates/ac-cli/${{ steps.version.outputs.version }}"
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -A 'ac-cli-publish-workflow' "$url")
+          case "$code" in
+            200) echo "exists=true" >> "$GITHUB_OUTPUT" ;;
+            404) echo "exists=false" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "crates.io answered $code for $url, refusing to guess"
+              exit 1
+              ;;
+          esac
+
+      - name: Already published
+        if: steps.check.outputs.exists == 'true'
+        run: |
+          echo "ac-cli ${{ steps.version.outputs.version }} is already on crates.io."
+          echo "Bump the version in Cargo.toml to publish a new release."
+
+      - name: Test
+        if: steps.check.outputs.exists == 'false'
+        run: cargo test
+
+      - name: Publish
+        if: steps.check.outputs.exists == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "CARGO_REGISTRY_TOKEN is not set on this repository."
+            echo "Create one at https://crates.io/settings/tokens, then:"
+            echo "  gh secret set CARGO_REGISTRY_TOKEN --repo ${{ github.repository }}"
+            exit 1
+          fi
+          cargo publish

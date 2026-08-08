@@ -172,6 +172,32 @@ build it, at the cost of `cargo install` succeeding on a platform where the
 binary cannot do anything. The description and README say so rather than a
 `compile_error!`.
 
+### The publish workflow
+
+`.github/workflows/publish.yml` runs on every push to `main`, so **a release is
+a version bump**: edit `version` in `Cargo.toml`, merge, and the workflow
+publishes. Nothing else is a release trigger, and there are no tags to
+remember.
+
+The workflow is idempotent, which is what makes "publish on every merge" safe.
+It reads the version from `cargo metadata` and asks crates.io whether that
+exact version exists:
+
+- **200** — already published, so the job prints that and stops. Every merge
+  that does not touch the version is a green no-op.
+- **404** — not published, so it runs `cargo test` and then `cargo publish`.
+- **anything else** — the job fails rather than guess. A 5xx or a rate limit
+  must never be read as "not published yet", because publishing is
+  irreversible: a version can be yanked, which only hides it from new
+  dependents, but it can never be reused or truly withdrawn.
+
+It runs on `ubuntu-latest`, which is only possible because of the no-`cfg`
+decision above; the rest of CI is on `macos-latest`.
+
+The token is the repo secret `CARGO_REGISTRY_TOKEN`, passed through the
+environment rather than `--token` so it stays out of the process list. Without
+it the publish step fails with instructions rather than a cargo backtrace.
+
 ## Manifest schema
 
 A project is a JSON file. Discovery, highest priority first:
