@@ -11,7 +11,7 @@ homepage = "https://github.com/pulkitxm/ac"
 documentation = "https://github.com/pulkitxm/ac#readme"
 keywords = ["container", "macos", "docker", "compose", "cli"]
 categories = ["command-line-utilities", "development-tools", "virtualization"]
-exclude = [".github/", "tests/", "projects/"]
+exclude = [".github/", "tests/", "projects/", "scripts/"]
 default-run = "ac"
 
 [[bin]]

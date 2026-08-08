@@ -159,12 +159,19 @@ yanked, and a yanked name is never released. `[[bin]] name = "ac"` is what
 keeps `cargo install ac-cli` putting `ac` on the PATH, so it must not be
 dropped in favour of the package name.
 
-`exclude` keeps `.github/`, `tests/` and `projects/` out of the published
-tarball. `projects/` in particular would be actively misleading: `ac_home()`
-finds bundled manifests by walking up from the executable, and nothing above
-`~/.cargo/bin/ac` has a `projects/` directory, so a bundled manifest could
-never be discovered by an installed binary. `docs/` must stay, because
-`dispatch.rs` embeds both files there with `include_str!`.
+`exclude` keeps `.github/`, `tests/`, `projects/` and `scripts/` out of the
+published tarball. `projects/` in particular would be actively misleading:
+`ac_home()` finds bundled manifests by walking up from the executable, and
+nothing above `~/.cargo/bin/ac` has a `projects/` directory, so a bundled
+manifest could never be discovered by an installed binary. `scripts/` is wiki
+tooling that only `wiki-sync.yml` runs, from the git checkout rather than the
+crate. `docs/` must stay: `dispatch.rs` embeds `guide.md` and
+`claude-snippet.md` with `include_str!`, and `docs/cli/` is what the README
+links to.
+
+0.3.2 shipped `scripts/sync-wiki.mjs` before this was tightened. A published
+version is immutable, so that tarball stays as it is; the exclusion applies
+from the next version bump onward.
 
 Nothing in the source is gated on `target_os`; `ac` shells out to `container`
 and compiles cleanly on Linux. That is deliberate, so docs.rs and non-macOS CI
