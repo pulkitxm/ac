@@ -1,6 +1,6 @@
 [package]
 name = "ac-cli"
-version = "0.3.2"
+version = "0.3.3"
 edition = "2021"
 rust-version = "1.80"
 description = "Apple Container project runner: a docker-compatible CLI and compose-style stack orchestrator for Apple container. macOS only."
@@ -8,7 +8,7 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/pulkitxm/ac"
 homepage = "https://github.com/pulkitxm/ac"
-documentation = "https://github.com/pulkitxm/ac#readme"
+documentation = "https://github.com/pulkitxm/ac/blob/main/docs/cli/README.md"
 keywords = ["container", "macos", "docker", "compose", "cli"]
 categories = ["command-line-utilities", "development-tools", "virtualization"]
 exclude = [".github/", "tests/", "projects/"]
