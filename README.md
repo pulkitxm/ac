@@ -56,9 +56,8 @@ build the binary.
    source <(COMPLETE=zsh ac)
    ```
 
-   For bash, use `COMPLETE=bash` in `~/.bashrc`. See
-   [Completions](docs/cli/completions.md) for the other shells and for what gets
-   completed.
+   Other shells, and what gets completed, are in
+   [Completions](docs/cli/completions.md).
 
 ## Quickstart
 
@@ -68,7 +67,6 @@ Drop it in `~/.config/ac/projects/<name>.json`:
 ```json
 {
   "name": "myapp",
-  "description": "whatever this stack is",
   "services": [
     {
       "name": "postgres",
@@ -85,8 +83,6 @@ Drop it in `~/.config/ac/projects/<name>.json`:
 }
 ```
 
-Then:
-
 ```bash
 ac ls              # your project is discovered
 ac myapp start     # daemon up if needed, volumes created, services started
@@ -95,32 +91,31 @@ ac myapp logs -f   # follow all services, prefixed and coloured
 ac myapp down      # stop and remove containers; volumes and data survive
 ```
 
-Services start in array order, each gated on the previous one's `readyCmd`.
-Containers are named `<project>-<service>`. Unknown manifest fields are
-rejected by name, so typos surface immediately. Every field is documented in
-the [Manifest reference](docs/cli/manifest.md); `ac schema` prints the JSON
-Schema, and the bundled `projects/shop.json` is a complete worked example with
-builds, profiles and registries.
+Services start in array order, each gated on the previous one's `readyCmd`,
+which stands in for the healthcheck primitive Apple `container` does not have.
+Containers are named `<project>-<service>`, and unknown manifest fields are
+rejected by name so typos surface immediately. Every field, including builds,
+profiles, registries and scripts, is in the
+[Manifest reference](docs/cli/manifest.md).
 
 ## Documentation
 
-The full CLI reference lives in [`docs/cli/`](docs/cli/README.md), and is also
+The full CLI reference is in [`docs/cli/`](docs/cli/README.md), and is
 published to the [wiki](https://github.com/pulkitxm/ac/wiki). `ac guide` prints
-a manual from inside the binary, and `ac <anything> --help` is written to be
-read cold.
+a manual from inside the binary, and every `--help` is written to be read cold.
 
 | Page | What it covers |
 | --- | --- |
-| [CLI reference](docs/cli/README.md) | The two invocation forms, reserved words, and a docker-to-ac translation table |
+| [CLI reference](docs/cli/README.md) | The two invocation forms, reserved words, docker-to-ac translation table |
 | [Global flags](docs/cli/global-flags.md) | `--json`, `--quiet`, `--no-color`, `-p`, every environment variable, exit codes |
 | [Containers](docs/cli/containers.md) | `run`, `create`, `start`, `stop`, `exec`, `logs`, `cp`, and the rest of the manifest-free verbs |
 | [Images and registries](docs/cli/images-and-registries.md) | `build`, `pull`, `push`, `tag`, `login`, and the `image` / `registry` groups |
 | [Project commands](docs/cli/project-commands.md) | Every `ac <project> <action>`, with flags and readiness semantics |
-| [Builds](docs/cli/builds.md) | Profiles, precedence, build root resolution, interpolation, progress modes |
+| [Builds](docs/cli/builds.md) | Profiles, precedence, build root resolution, interpolation, live progress |
 | [Rollouts](docs/cli/rollouts.md) | Post-push hooks and the environment handed to them |
-| [Manifest](docs/cli/manifest.md) | Field-by-field schema reference, discovery, and `scripts` |
-| [Daemon and system](docs/cli/daemon-and-system.md) | Ownership, the supervisor, `ps`, `status`, `system`, `volume`, `network`, `builder` |
-| [Completions](docs/cli/completions.md) | Shell setup, what completes, and how the daemon-backed completers are bounded |
+| [Manifest](docs/cli/manifest.md) | Field-by-field schema, discovery, private registries, `scripts` |
+| [Daemon and system](docs/cli/daemon-and-system.md) | Ownership, the supervisor, `ps`, `status`, `system`, `volume`, `network`, `builder`, `ac config` |
+| [Completions](docs/cli/completions.md) | Shell setup and what completes |
 | [Agents and JSON](docs/cli/agents-and-json.md) | Driving `ac` from scripts, CI and coding agents |
 
 ## Daemon ownership
@@ -132,15 +127,12 @@ The part worth understanding, because it is the whole point of the tool.
 | Daemon **already running** | Uses it. Never starts, restarts or stops it, including on `ac <project> stop`. |
 | Daemon **not running** | Starts it, records ownership in `~/.local/state/ac/daemon.owned`, and spawns a supervisor. |
 
-When `ac` owns the daemon, a detached supervisor process polls for running
-containers. Once the last `ac`-managed container disappears (whether you ran
-`ac <project> stop`, the containers exited on their own, or they crashed), the
-supervisor stops the daemon and exits.
-
-Ownership lives in a file rather than in memory, so a second `ac` invocation
-from a different terminal makes the same decision. Shutdown refcounts across
-**all** projects: stopping one project while another is still up leaves the
-daemon running. The full contract is in
+When `ac` owns the daemon, a detached supervisor polls for running containers
+and stops the daemon once the last `ac`-managed container disappears, whether
+you ran `ac <project> stop`, the containers exited on their own, or they
+crashed. Ownership lives in a file rather than in memory, so a second `ac`
+invocation from another terminal makes the same decision, and the refcount
+spans **all** projects. Full contract in
 [Daemon and system](docs/cli/daemon-and-system.md).
 
 ## Two surfaces
@@ -148,7 +140,7 @@ daemon running. The full contract is in
 `ac <project> <action> [services...]` acts on services resolved through a
 manifest, and is the only form that does ordered startup gated on `readyCmd`,
 named volume creation and filtered registry login. `ac <action> <container>`
-acts on one container or image by its real name, with no manifest involved:
+acts on one container or image by its real name, no manifest involved:
 
 ```bash
 ac build -t app:dev .              # a Dockerfile in this directory
@@ -157,83 +149,21 @@ ac logs -f app-dev                 # follow it
 ```
 
 Do not write a manifest just to run one container. Both surfaces mirror docker,
-noun groups (`ac ps`, `ac image ls`, `ac volume prune`) and verbs (`ac run`,
-`ac build`, `ac logs`) alike, with `--json` on every read. See the
-[CLI reference](docs/cli/README.md) for the complete list and the docker
-translation table.
-
-## Builds
-
-`ac <project> build` runs every build in the manifest in parallel. On a TTY
-each build renders a single live line: current step position, the instruction
-being run, per-step elapsed and total elapsed, all ticking in real time.
-Finished steps print compactly as they complete, cached steps are marked, and
-a failing build replays its last output lines so the cause is on screen.
-
-```
-⠸ web  [9/14] RUN pnpm install --frozen-lockfile  41.2s | total 1m03s
-   + [web] [8/14] COPY package.json pnpm-lock.yaml ./  0.1s
-   - [web] [7/14] WORKDIR /app  cached
-```
-
-Every setting resolves CLI flag > profile > build entry > project default.
-Profiles, build root resolution, `{{...}}` interpolation and the progress modes
-are covered in [Builds](docs/cli/builds.md); shipping what you built is in
-[Rollouts](docs/cli/rollouts.md).
-
-## Private registries (AWS ECR, GHCR, and friends)
-
-Declare a `registries` block and `ac` authenticates before pulling, on every
-`start` and `pull`. Credentials are never written into the manifest: you give a
-`passwordCmd` argv that is executed and piped to `--password-stdin`.
-
-```json
-{
-  "server": "123456789012.dkr.ecr.us-east-1.amazonaws.com",
-  "username": "AWS",
-  "passwordCmd": ["aws", "ecr", "get-login-password", "--region", "us-east-1"]
-}
-```
-
-Re-running on every start matters for ECR, whose tokens expire after 12 hours.
-Login is filtered to the registries the images actually come from, so pulling
-postgres from docker.io never touches ECR. The pattern works for any registry
-that takes a username and a token on stdin:
-
-```json
-{ "server": "ghcr.io", "username": "you", "passwordCmd": ["gh", "auth", "token"] }
-```
-
-## Configuration
-
-`~/.config/ac/config.json`, created on first run:
-
-```json
-{
-  "appRoot": "/path/to/app-root",
-  "startTimeout": 90
-}
-```
-
-`appRoot` is passed as `--app-root` when `ac` starts the daemon, and is seeded
-from the running daemon on first run so `ac` keeps using your existing image
-store.
+the noun groups (`ac ps`, `ac image ls`, `ac volume prune`) and the verbs alike,
+with `--json` on every read. The
+[CLI reference](docs/cli/README.md) has the complete list.
 
 ## Notes on Apple Container
 
 - One lightweight VM **per container**, each with its own kernel, so `memory`
-  is VM sizing, and container counts cost real RAM.
-- Every container gets a routable IP (`192.168.64.x`). You can reach it directly
-  without publishing ports; `ac <project> ip` prints them.
-- ICMP is blocked host to container, so `ping` fails even when TCP works.
-- Named volumes are real ext4 block devices, not host directories, so every
-  fresh volume contains a `lost+found`. Anything that insists on an empty
-  directory will refuse to start. Postgres is the common case, which is why the
-  example manifests set `PGDATA` to a subdirectory of the mount point:
+  is VM sizing and container counts cost real RAM.
+- Every container gets a routable IP (`192.168.64.x`), reachable without
+  publishing ports (`ac <project> ip` prints them). ICMP is blocked, so `ping`
+  fails even when TCP works.
+- Named volumes are real ext4 block devices, so a fresh one already contains a
+  `lost+found`. Anything insisting on an empty directory refuses to start,
+  which is why the example manifests point `PGDATA` at a subdirectory. This
+  does not happen on Docker, where volumes are plain directories.
 
-  ```
-  initdb: error: directory "/var/lib/postgresql/data" exists but is not empty
-  initdb: detail: It contains a lost+found directory
-  ```
-
-  This does not happen on Docker, where named volumes are plain directories.
+The rest of the sharp edges, and what `ac` does about each, are in
+[CLAUDE.md](CLAUDE.md).
